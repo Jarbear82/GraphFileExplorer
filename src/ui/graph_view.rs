@@ -6,6 +6,7 @@ use gpui::{
 };
 use gpui_component::dock::{BasePanel, Panel, PanelEvent};
 use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::{
     ActiveTheme, Disableable, StyledExt, h_flex, label::Label, v_flex,
 };
@@ -187,13 +188,62 @@ impl GraphView {
             .hover(|s| s.border_color(cx.theme().primary.opacity(0.7)).shadow_md())
             .cursor_pointer()
             .on_click(cx.listener({
+                let ws_click = ws.clone();
                 let p = target_path.clone();
                 move |_this, _event, _window, cx| {
-                    ws.update(cx, |ws, cx| {
+                    ws_click.update(cx, |ws, cx| {
                         ws.select_path(Some(p.clone()), cx);
                     });
                 }
             }))
+            .context_menu({
+                let ws_ctx = ws.clone();
+                let p_ctx = target_path.clone();
+                let is_dir = is_dir;
+                move |menu: PopupMenu, _window, _cx| {
+                    let p_open = p_ctx.clone();
+                    let p_reveal = p_ctx.clone();
+                    let p_copy = p_ctx.clone();
+                    let p_del = p_ctx.clone();
+                    let ws_open = ws_ctx.clone();
+                    let ws_del = ws_ctx.clone();
+
+                    menu
+                        .item(
+                            PopupMenuItem::new(if is_dir { "➔ Drill Down" } else { "⚡ Open in Editor" })
+                                .on_click(move |_event, _window, cx| {
+                                    let p = p_open.clone();
+                                    if is_dir {
+                                        ws_open.update(cx, |ws, cx| { ws.drill_down(p, cx); });
+                                    } else {
+                                        Workspace::open_in_system_editor(&p);
+                                    }
+                                })
+                        )
+                        .item(
+                            PopupMenuItem::new("📁 Reveal in File Manager")
+                                .on_click(move |_event, _window, _cx| {
+                                    Workspace::reveal_in_file_manager(&p_reveal);
+                                })
+                        )
+                        .item(
+                            PopupMenuItem::new("📋 Copy Path")
+                                .on_click(move |_event, _window, cx| {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(p_copy.to_string_lossy().to_string()));
+                                })
+                        )
+                        .separator()
+                        .item(
+                            PopupMenuItem::new("🗑 Delete")
+                                .on_click(move |_event, _window, cx| {
+                                    let p = p_del.clone();
+                                    ws_del.update(cx, |ws, cx| {
+                                        let _ = ws.delete_entry(&p, cx);
+                                    });
+                                })
+                        )
+                }
+            })
             // Node Header
             .child(
                 h_flex()

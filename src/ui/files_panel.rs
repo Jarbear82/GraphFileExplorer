@@ -7,6 +7,7 @@ use gpui::{
 use gpui_component::dock::{BasePanel, Panel, PanelEvent};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::list::ListItem;
+use gpui_component::menu::{PopupMenu, PopupMenuItem};
 use gpui_component::tree::{TreeEntry, TreeItem, TreeState, tree};
 use gpui_component::{
     ActiveTheme, IconName, StyledExt, h_flex, label::Label, v_flex,
@@ -194,7 +195,7 @@ impl Render for FilesPanel {
                             ),
                     ),
             )
-            // Official gpui_component Tree Component (keyboard nav, expand/collapse, virtualized list)
+            // Official gpui_component Tree Component with Context Menu
             .child(
                 div()
                     .id("tree-view-wrapper")
@@ -272,6 +273,55 @@ impl Render for FilesPanel {
                                                         }),
                                                 )
                                             }),
+                                    )
+                            }
+                        })
+                        .context_menu({
+                            let ws = ws.clone();
+                            move |_ix, entry, menu: PopupMenu, _window, _cx| {
+                                let path_str = entry.item().id.to_string();
+                                let path = PathBuf::from(&path_str);
+                                let is_dir = entry.is_folder();
+                                let p_open = path.clone();
+                                let p_reveal = path.clone();
+                                let p_copy = path.clone();
+                                let p_del = path.clone();
+                                let ws_open = ws.clone();
+                                let ws_del = ws.clone();
+
+                                menu
+                                    .item(
+                                        PopupMenuItem::new(if is_dir { "➔ Drill Down" } else { "⚡ Open in Editor" })
+                                            .on_click(move |_event, _window, cx| {
+                                                let p = p_open.clone();
+                                                if is_dir {
+                                                    ws_open.update(cx, |ws, cx| { ws.drill_down(p, cx); });
+                                                } else {
+                                                    Workspace::open_in_system_editor(&p);
+                                                }
+                                            })
+                                    )
+                                    .item(
+                                        PopupMenuItem::new("📁 Reveal in File Manager")
+                                            .on_click(move |_event, _window, _cx| {
+                                                Workspace::reveal_in_file_manager(&p_reveal);
+                                            })
+                                    )
+                                    .item(
+                                        PopupMenuItem::new("📋 Copy Path")
+                                            .on_click(move |_event, _window, cx| {
+                                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(p_copy.to_string_lossy().to_string()));
+                                            })
+                                    )
+                                    .separator()
+                                    .item(
+                                        PopupMenuItem::new("🗑 Delete")
+                                            .on_click(move |_event, _window, cx| {
+                                                let p = p_del.clone();
+                                                ws_del.update(cx, |ws, cx| {
+                                                    let _ = ws.delete_entry(&p, cx);
+                                                });
+                                            })
                                     )
                             }
                         })

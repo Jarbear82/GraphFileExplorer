@@ -1,8 +1,8 @@
 use gpui::prelude::*;
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, KeyDownEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Render, ScrollDelta,
-    ScrollWheelEvent, Styled, Window, div, px,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, PathBuilder, Render,
+    ScrollDelta, ScrollWheelEvent, Styled, Window, canvas, div, point, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::dock::{BasePanel, Panel, PanelEvent};
@@ -636,6 +636,55 @@ impl Render for GraphView {
                                     .top(px(pan_y))
                                     .w(px(layout.total_width * zoom))
                                     .h(px(layout.total_height * zoom))
+                                    // Visual Connector Edges from Central Hub to Child Nodes (clipped to node perimeters)
+                                    .child(
+                                        canvas(
+                                            move |_bounds, _window, _cx| (),
+                                            {
+                                                let children = layout.root_node.children.clone();
+                                                let zoom = zoom;
+                                                move |bounds, _, window, cx| {
+                                                    let hub_cx = hub_x + hub_w / 2.0;
+                                                    let hub_cy = hub_y + hub_h / 2.0;
+                                                    let hub_hw = hub_w / 2.0 + 1.0;
+                                                    let hub_hh = hub_h / 2.0 + 1.0;
+
+                                                    let mut builder = PathBuilder::stroke(px(1.5));
+                                                    let mut has_segments = false;
+
+                                                    for child in &children {
+                                                        let child_w = (child.width * zoom).max(60.0);
+                                                        let child_h = (child.height * zoom).max(40.0);
+                                                        let child_cx = child.x * zoom + child_w / 2.0;
+                                                        let child_cy = child.y * zoom + child_h / 2.0;
+                                                        let child_hw = child_w / 2.0 + 1.0;
+                                                        let child_hh = child_h / 2.0 + 1.0;
+
+                                                        if let Some(((sx, sy), (ex, ey))) = clip_line_to_boxes(
+                                                            hub_cx, hub_cy, hub_hw, hub_hh,
+                                                            child_cx, child_cy, child_hw, child_hh,
+                                                        ) {
+                                                            let p_start = point(bounds.origin.x + px(sx), bounds.origin.y + px(sy));
+                                                            let p_end = point(bounds.origin.x + px(ex), bounds.origin.y + px(ey));
+
+                                                            builder.move_to(p_start);
+                                                            builder.line_to(p_end);
+                                                            has_segments = true;
+                                                        }
+                                                    }
+
+                                                    if has_segments {
+                                                        if let Ok(path) = builder.build() {
+                                                            let line_color = cx.theme().primary.opacity(0.4);
+                                                            window.paint_path(path, line_color);
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                        )
+                                        .absolute()
+                                        .size_full(),
+                                    )
                                     // Central Core Hub Node
                                     .child(
                                         v_flex()
@@ -776,4 +825,43 @@ impl Render for GraphView {
                 }
             })
     }
+}
+
+fn clip_line_to_boxes(
+    cx1: f32,
+    cy1: f32,
+    hw1: f32,
+    hh1: f32,
+    cx2: f32,
+    cy2: f32,
+    hw2: f32,
+    hh2: f32,
+) -> Option<((f32, f32), (f32, f32))> {
+    let dx = cx2 - cx1;
+    let dy = cy2 - cy1;
+    let dist = (dx * dx + dy * dy).sqrt();
+
+    if dist < 1.0 {
+        return None;
+    }
+
+    let ux = dx / dist;
+    let uy = dy / dist;
+
+    let tx1 = if ux.abs() > 1e-6 { hw1 / ux.abs() } else { f32::INFINITY };
+    let ty1 = if uy.abs() > 1e-6 { hh1 / uy.abs() } else { f32::INFINITY };
+    let t1 = tx1.min(ty1);
+
+    let tx2 = if ux.abs() > 1e-6 { hw2 / ux.abs() } else { f32::INFINITY };
+    let ty2 = if uy.abs() > 1e-6 { hh2 / uy.abs() } else { f32::INFINITY };
+    let t2 = tx2.min(ty2);
+
+    if t1 + t2 >= dist {
+        return None;
+    }
+
+    let start = (cx1 + ux * t1, cy1 + uy * t1);
+    let end = (cx2 - ux * t2, cy2 - uy * t2);
+
+    Some((start, end))
 }

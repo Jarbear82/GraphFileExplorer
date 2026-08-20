@@ -5,25 +5,28 @@ use crate::model::layout::{
     CompoundLayoutAlgorithm, LayoutKind, LayoutNode, LayoutOptions, LayoutResult,
 };
 
-/// Size-Aware Radial Balloon Tree Layout
+/// Dynamic Content-Fitted Radial Balloon Tree Layout
 /// Implements non-overlapping radial orbital placement with directional outward sub-balloons:
+/// - Dynamic content-fitted node widths based on filename character count
+/// - Dynamic central Hub diameter scaling based on direct item count
 /// - Exact bottom-up recursive circumscribed bounding disk computation (Lin & Eades / Carriere & Kazman)
 /// - Exact chord-length non-overlapping orbit radius solver via binary search
 /// - Outward-projecting radial sectors for expanded sub-trees to prevent backward overlap with hub and sibling branches
-/// - Strict non-overlapping guarantees across all recursion levels
 pub struct RadialBalloonTreeLayout;
 
 impl RadialBalloonTreeLayout {
-    /// Predicts base width and height of a node based on its contents
-    fn predict_node_size(entry: &FsEntry, options: &LayoutOptions) -> (f32, f32) {
-        if !entry.is_dir || entry.children.is_empty() {
-            return (options.base_node_width, options.base_node_height);
+    /// Predicts content-fitted width and height of a node based on filename length and directory state
+    fn predict_node_size(entry: &FsEntry, _options: &LayoutOptions) -> (f32, f32) {
+        let name_len = entry.name.chars().count() as f32;
+        if entry.is_dir && !entry.children.is_empty() {
+            let width = (58.0 + name_len * 7.5).clamp(85.0, 220.0);
+            let height = 62.0;
+            (width, height)
+        } else {
+            let width = (50.0 + name_len * 7.2).clamp(70.0, 200.0);
+            let height = 40.0;
+            (width, height)
         }
-        let count = entry.children.len().max(1) as f32;
-        let count_factor = count.sqrt().max(1.0);
-        let width = options.base_node_width * (0.85 + 0.35 * count_factor);
-        let height = options.base_node_height * (0.85 + 0.35 * count_factor);
-        (width, height)
     }
 
     /// Computes the circumscribed bounding radius for a node including padding and gap
@@ -64,7 +67,6 @@ impl RadialBalloonTreeLayout {
     }
 
     /// Solves for the minimal orbit radius R that guarantees zero overlap between all adjacent nodes.
-    /// Uses binary search to satisfy: sum( 2 * arcsin( (r_i + r_{i+1}) / (2 * R) ) ) <= max_angle
     fn solve_minimal_orbit_radius(radii: &[f32], hub_radius: f32, gap: f32) -> f32 {
         Self::solve_minimal_orbit_radius_sector(radii, hub_radius, gap, 2.0 * PI)
     }
@@ -131,6 +133,7 @@ impl RadialBalloonTreeLayout {
         children: &[FsEntry],
         center_x: f32,
         center_y: f32,
+        hub_radius: f32,
         parent_angle: Option<f32>,
         options: &LayoutOptions,
         depth: usize,
@@ -144,7 +147,7 @@ impl RadialBalloonTreeLayout {
             return (Vec::new(), center_x, center_x, center_y, center_y);
         }
 
-        // 1. Calculate node dimensions and true recursive subtree bounding radii
+        // 1. Calculate content-fitted dimensions and true recursive subtree bounding radii
         let mut node_sizes = Vec::with_capacity(n);
         let mut radii = Vec::with_capacity(n);
 
@@ -157,7 +160,6 @@ impl RadialBalloonTreeLayout {
 
         // 2. Determine angular sector and solve for minimal non-overlapping orbit radius
         let is_root_hub = parent_angle.is_none();
-        let hub_radius = (options.base_node_width / 2.0).max(60.0);
 
         let (orbit_radius, angles) = if is_root_hub {
             // Full 360-degree circle for the root hub
@@ -254,10 +256,12 @@ impl RadialBalloonTreeLayout {
                     ..options.clone()
                 };
 
+                let child_node_r = (node_w.max(node_h) / 2.0).max(30.0);
                 let (sub_nodes, sub_min_x, sub_max_x, sub_min_y, sub_max_y) = Self::layout_radial_children(
                     &child.children,
                     child_center_x,
                     child_center_y,
+                    child_node_r,
                     Some(angle),
                     &sub_options,
                     depth + 1,
@@ -332,6 +336,11 @@ impl CompoundLayoutAlgorithm for RadialBalloonTreeLayout {
         let mut max_scale = 1.0f32;
         let mut node_count = 1;
 
+        // Calculate dynamic Hub diameter based on direct child count
+        let child_count = root.children.len() as f32;
+        let hub_diameter = (64.0 + child_count.sqrt() * 12.0).clamp(70.0, 150.0);
+        let hub_radius = hub_diameter / 2.0;
+
         // Use estimated initial center
         let approx_center_x = available_width.max(800.0) / 2.0;
         let approx_center_y = available_height.max(600.0) / 2.0;
@@ -340,6 +349,7 @@ impl CompoundLayoutAlgorithm for RadialBalloonTreeLayout {
             &root.children,
             approx_center_x,
             approx_center_y,
+            hub_radius,
             None,
             options,
             1,
@@ -351,8 +361,8 @@ impl CompoundLayoutAlgorithm for RadialBalloonTreeLayout {
 
         // Normalize coordinates with padding
         let padding = options.padding + 32.0;
-        let offset_x = padding - min_x.min(approx_center_x - options.base_node_width / 2.0);
-        let offset_y = padding - min_y.min(approx_center_y - options.base_node_height / 2.0);
+        let offset_x = padding - min_x.min(approx_center_x - hub_radius);
+        let offset_y = padding - min_y.min(approx_center_y - hub_radius);
 
         let mut normalized_children = children;
         for node in &mut normalized_children {
@@ -370,10 +380,10 @@ impl CompoundLayoutAlgorithm for RadialBalloonTreeLayout {
             category: root.category.clone(),
             size_bytes: root.size_bytes,
             item_count: root.item_count,
-            x: approx_center_x + offset_x - (options.base_node_width / 2.0),
-            y: approx_center_y + offset_y - (options.base_node_height / 2.0),
-            width: options.base_node_width,
-            height: options.base_node_height,
+            x: approx_center_x + offset_x - hub_radius,
+            y: approx_center_y + offset_y - hub_radius,
+            width: hub_diameter,
+            height: hub_diameter,
             scale: 1.0,
             depth: 0,
             children: normalized_children,

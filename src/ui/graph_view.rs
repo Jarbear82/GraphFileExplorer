@@ -15,6 +15,32 @@ use std::path::PathBuf;
 use crate::model::layout::{LayoutKind, LayoutNode, LayoutResult};
 use crate::workspace::Workspace;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZoomLodTier {
+    /// Planetary Dots / Chips (z < 0.40)
+    Macro,
+    /// Auto-fit single-row compact pill (0.40 <= z < 0.70)
+    Overview,
+    /// Standard 2-row interactive card (0.70 <= z < 1.25)
+    Standard,
+    /// Detailed rich preview card with sub-pills (z >= 1.25)
+    Detailed,
+}
+
+impl ZoomLodTier {
+    pub fn from_zoom(zoom: f32) -> Self {
+        if zoom < 0.40 {
+            Self::Macro
+        } else if zoom < 0.70 {
+            Self::Overview
+        } else if zoom < 1.25 {
+            Self::Standard
+        } else {
+            Self::Detailed
+        }
+    }
+}
+
 pub struct GraphView {
     workspace: Entity<Workspace>,
     focus_handle: FocusHandle,
@@ -196,7 +222,21 @@ impl GraphView {
         let drill_path = node.path.clone();
         let is_dir = node.is_dir;
 
-        // Size-based subtle indicator color
+        let lod = if is_radial {
+            ZoomLodTier::from_zoom(self.zoom)
+        } else {
+            ZoomLodTier::Standard
+        };
+
+        // Subtle category color indicator
+        let category_color = match node.category {
+            crate::model::fs_entry::FileCategory::Directory => cx.theme().primary,
+            crate::model::fs_entry::FileCategory::Rust => cx.theme().warning,
+            crate::model::fs_entry::FileCategory::Image => cx.theme().accent,
+            crate::model::fs_entry::FileCategory::Archive => cx.theme().warning,
+            _ => cx.theme().foreground,
+        };
+
         let size_badge_color = if is_dir {
             cx.theme().foreground
         } else if node.size_bytes > 10 * 1024 * 1024 {
@@ -207,7 +247,127 @@ impl GraphView {
             cx.theme().muted_foreground
         };
 
-        // Coordinates & sizes: dynamically scaled for radial canvas, natural base size for TopDown grid
+        let ws_click = ws.clone();
+        let p_card = target_path.clone();
+
+        // 1. TIER 1: MACRO LEVEL (z < 0.40) - Planetary Dot / Chip
+        if lod == ZoomLodTier::Macro {
+            let z = self.zoom;
+            let d = (node.width.min(node.height) * z).clamp(10.0, 22.0);
+            let node_x = node.x * z + (node.width * z - d) / 2.0;
+            let node_y = node.y * z + (node.height * z - d) / 2.0;
+
+            return v_flex()
+                .id(format!("card-macro-{}", node.id))
+                .when(is_radial, |s| s.absolute().left(px(node_x)).top(px(node_y)))
+                .w(px(d))
+                .h(px(d))
+                .rounded_full()
+                .border_1()
+                .border_color(if is_selected {
+                    cx.theme().primary
+                } else if is_expanded {
+                    cx.theme().primary.opacity(0.8)
+                } else {
+                    category_color.opacity(0.6)
+                })
+                .bg(if is_selected {
+                    cx.theme().primary
+                } else if is_dir {
+                    cx.theme().primary.opacity(0.5)
+                } else {
+                    category_color.opacity(0.35)
+                })
+                .shadow_sm()
+                .hover(|s| s.border_color(cx.theme().primary).shadow_md())
+                .cursor_pointer()
+                .on_click(move |_event, _window, cx| {
+                    let p = p_card.clone();
+                    ws_click.update(cx, |ws, cx| {
+                        ws.select_path(Some(p), cx);
+                    });
+                })
+                .into_any_element();
+        }
+
+        // 2. TIER 2: OVERVIEW LEVEL (0.40 <= z < 0.70) - Auto-Fit Single-Row Compact Pill
+        if lod == ZoomLodTier::Overview {
+            let z = self.zoom;
+            let node_x = node.x * z;
+            let node_y = node.y * z;
+            let node_w = node.width * z;
+            let node_h = (node.height * z).clamp(20.0, 32.0);
+            let icon_sz = (12.0 * z).clamp(8.0, 16.0);
+            let font_sz = (10.5 * z).clamp(7.5, 14.0);
+
+            return v_flex()
+                .id(format!("card-overview-{}", node.id))
+                .when(is_radial, |s| s.absolute().left(px(node_x)).top(px(node_y)))
+                .w(px(node_w))
+                .h(px(node_h))
+                .px(px((6.0 * z).max(2.0)))
+                .py(px((2.0 * z).max(1.0)))
+                .justify_center()
+                .rounded_md()
+                .border_1()
+                .border_color(if is_selected {
+                    cx.theme().primary
+                } else if is_expanded {
+                    cx.theme().primary.opacity(0.8)
+                } else {
+                    cx.theme().border
+                })
+                .bg(if is_selected {
+                    cx.theme().primary.opacity(0.18)
+                } else if is_expanded {
+                    cx.theme().primary.opacity(0.10)
+                } else if is_dir {
+                    cx.theme().secondary.opacity(0.5)
+                } else {
+                    cx.theme().background
+                })
+                .shadow_sm()
+                .hover(|s| s.border_color(cx.theme().primary.opacity(0.7)).shadow_md())
+                .cursor_pointer()
+                .on_click(move |_event, _window, cx| {
+                    let p = p_card.clone();
+                    ws_click.update(cx, |ws, cx| {
+                        ws.select_path(Some(p), cx);
+                    });
+                })
+                .child(
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .gap(px((3.0 * z).max(1.0)))
+                        .child(
+                            Icon::new(if is_dir {
+                                if is_expanded {
+                                    IconName::FolderOpen
+                                } else {
+                                    IconName::Folder
+                                }
+                            } else {
+                                IconName::File
+                            })
+                            .size(px(icon_sz))
+                            .text_color(if is_dir {
+                                cx.theme().foreground
+                            } else {
+                                category_color
+                            }),
+                        )
+                        .child(
+                            Label::new(node.name.clone())
+                                .font_semibold()
+                                .text_size(px(font_sz))
+                                .text_color(cx.theme().foreground),
+                        ),
+                )
+                .into_any_element();
+        }
+
+        // 3. TIERS 3 & 4: STANDARD & DETAILED TIERS (z >= 0.70) - 2-Row Interactive / Deep Preview Cards
         let (
             node_x, node_y, node_w, node_h,
             font_title, font_badge,
@@ -218,16 +378,16 @@ impl GraphView {
             (
                 node.x * z,
                 node.y * z,
-                (node.width * z).max(16.0),
-                (node.height * z).max(12.0),
+                node.width * z,
+                node.height * z,
                 11.0 * z,
                 9.0 * z,
                 13.0 * z,
                 11.0 * z,
-                (6.0 * z).max(1.0),
-                (8.0 * z).max(1.0),
-                (4.0 * z).max(1.0),
-                (6.0 * z).clamp(1.0, 12.0),
+                (6.0 * z).max(2.0),
+                (8.0 * z).max(3.0),
+                (4.0 * z).max(2.0),
+                (6.0 * z).clamp(2.0, 12.0),
             )
         } else {
             (
@@ -245,9 +405,6 @@ impl GraphView {
                 6.0,
             )
         };
-
-        let ws_click = ws.clone();
-        let p_card = target_path.clone();
 
         v_flex()
             .id(format!("card-{}", node.id))
@@ -369,91 +526,82 @@ impl GraphView {
                     )
                 }
             })
-            // Node Header (Rendered when icon or text is large enough to be legible)
-            .when(icon_sz >= 7.0 || font_title >= 7.0, |card| {
-                card.child(
-                    h_flex()
-                        .w_full()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            h_flex()
-                                .items_center()
-                                .gap(px(gap_sz))
-                                .when(icon_sz >= 7.0, |h| {
-                                    h.child(
-                                        Icon::new(if is_dir {
-                                            if is_expanded {
-                                                IconName::FolderOpen
-                                            } else {
-                                                IconName::Folder
-                                            }
-                                        } else {
-                                            IconName::File
-                                        })
-                                        .size(px(icon_sz)),
-                                    )
+            // Node Header
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap(px(gap_sz))
+                            .child(
+                                Icon::new(if is_dir {
+                                    if is_expanded {
+                                        IconName::FolderOpen
+                                    } else {
+                                        IconName::Folder
+                                    }
+                                } else {
+                                    IconName::File
                                 })
-                                .when(font_title >= 7.0, |h| {
-                                    h.child(Label::new(node.name.clone()).font_semibold().text_size(px(font_title)))
-                                }),
-                        )
-                        .when(is_dir && icon_sm_sz >= 8.0 && node_w >= 65.0, |h| {
-                            let ws_drill = ws.clone();
-                            let ws_exp = ws.clone();
-                            let p_drill = drill_path.clone();
-                            let p_exp = drill_path.clone();
+                                .size(px(icon_sz)),
+                            )
+                            .child(Label::new(node.name.clone()).font_semibold().text_size(px(font_title))),
+                    )
+                    .child(if is_dir {
+                        let ws_drill = ws.clone();
+                        let ws_exp = ws.clone();
+                        let p_drill = drill_path.clone();
+                        let p_exp = drill_path.clone();
 
-                            h.child(
-                                h_flex()
-                                    .items_center()
-                                    .gap(px((2.0 * if is_radial { self.zoom } else { 1.0 }).clamp(1.0, 6.0)))
-                                    // Expand / Collapse in-place Radial Balloon button
-                                    .child(
-                                        Button::new(format!("btn-expand-{}", node.id))
-                                            .icon(Icon::new(if is_expanded {
-                                                IconName::Minus
-                                            } else {
-                                                IconName::Plus
-                                            }).size(px(icon_sm_sz)))
-                                            .ghost()
-                                            .on_click(move |_event, _window, cx| {
-                                                let p = p_exp.clone();
-                                                ws_exp.update(cx, |ws, cx| {
-                                                    ws.toggle_expand(p, cx);
-                                                });
-                                            }),
-                                    )
-                                    // Drill Down Navigation Button
-                                    .child(
-                                        Button::new(format!("btn-enter-{}", node.id))
-                                            .icon(Icon::new(IconName::ChevronRight).size(px(icon_sm_sz)))
-                                            .ghost()
-                                            .on_click(move |_event, _window, cx| {
-                                                let p = p_drill.clone();
-                                                ws_drill.update(cx, |ws, cx| {
-                                                    ws.drill_down(p, cx);
-                                                });
-                                            }),
-                                    ),
+                        h_flex()
+                            .items_center()
+                            .gap(px((2.0 * if is_radial { self.zoom } else { 1.0 }).clamp(1.0, 6.0)))
+                            // Expand / Collapse in-place Radial Balloon button
+                            .child(
+                                Button::new(format!("btn-expand-{}", node.id))
+                                    .icon(Icon::new(if is_expanded {
+                                        IconName::Minus
+                                    } else {
+                                        IconName::Plus
+                                    }).size(px(icon_sm_sz)))
+                                    .ghost()
+                                    .on_click(move |_event, _window, cx| {
+                                        let p = p_exp.clone();
+                                        ws_exp.update(cx, |ws, cx| {
+                                            ws.toggle_expand(p, cx);
+                                        });
+                                    }),
                             )
-                        })
-                        .when(!is_dir && font_badge >= 7.0, |h| {
-                            h.child(
-                                div()
-                                    .text_size(px(font_badge))
-                                    .text_color(size_badge_color)
-                                    .child(crate::model::fs_entry::format_bytes(node.size_bytes)),
+                            // Drill Down Navigation Button
+                            .child(
+                                Button::new(format!("btn-enter-{}", node.id))
+                                    .icon(Icon::new(IconName::ChevronRight).size(px(icon_sm_sz)))
+                                    .ghost()
+                                    .on_click(move |_event, _window, cx| {
+                                        let p = p_drill.clone();
+                                        ws_drill.update(cx, |ws, cx| {
+                                            ws.drill_down(p, cx);
+                                        });
+                                    }),
                             )
-                        }),
-                )
-            })
-            // Nested Child Preview (when collapsed and zoomed in enough)
+                            .into_any_element()
+                    } else {
+                        div()
+                            .text_size(px(font_badge))
+                            .text_color(size_badge_color)
+                            .child(crate::model::fs_entry::format_bytes(node.size_bytes))
+                            .into_any_element()
+                    }),
+            )
+            // Nested Child Preview (when in Detailed LoD tier)
             .when(
-                is_dir && !node.children.is_empty() && !is_expanded && (!is_radial || (self.zoom >= 0.75 && font_badge >= 7.0)),
+                is_dir && !node.children.is_empty() && !is_expanded && (lod == ZoomLodTier::Detailed || !is_radial),
                 |el| el.child(self.render_nested_preview(node, is_radial, cx)),
             )
-            .when(is_dir && is_expanded && font_badge >= 7.0, |el| {
+            .when(is_dir && is_expanded, |el| {
                 el.child(
                     div()
                         .w_full()
@@ -463,7 +611,7 @@ impl GraphView {
                         .child(format!("Expanded ({} items)", node.children.len())),
                 )
             })
-            .when(is_dir && node.children.is_empty() && font_badge >= 7.0, |el| {
+            .when(is_dir && node.children.is_empty(), |el| {
                 el.child(
                     div()
                         .w_full()
@@ -473,6 +621,7 @@ impl GraphView {
                         .child(format!("{} items", node.item_count)),
                 )
             })
+            .into_any_element()
     }
 
     fn handle_key_down(
@@ -830,61 +979,105 @@ impl Render for GraphView {
                                     )
                                     // Central Core Hub Node
                                     .child({
-                                        let hub_pad_h = (8.0 * zoom).max(1.0);
-                                        let hub_pad_v = (6.0 * zoom).max(1.0);
-                                        let hub_icon_sz = 14.0 * zoom;
-                                        let hub_title_sz = 12.0 * zoom;
-                                        let hub_sub_sz = 10.0 * zoom;
+                                        let hub_lod = ZoomLodTier::from_zoom(zoom);
+                                        let hub_pad_h = (8.0 * zoom).max(2.0);
+                                        let hub_pad_v = (6.0 * zoom).max(2.0);
+                                        let hub_icon_sz = (14.0 * zoom).clamp(8.0, 32.0);
+                                        let hub_title_sz = (12.0 * zoom).clamp(7.5, 26.0);
+                                        let hub_sub_sz = (10.0 * zoom).clamp(6.5, 20.0);
                                         let hub_gap = (3.0 * zoom).max(1.0);
 
-                                        v_flex()
-                                            .absolute()
-                                            .left(px(hub_x))
-                                            .top(px(hub_y))
-                                            .w(px(hub_w))
-                                            .h(px(hub_h))
-                                            .px(px(hub_pad_h))
-                                            .py(px(hub_pad_v))
-                                            .gap(px(hub_gap))
-                                            .rounded_full()
-                                            .border_2()
-                                            .border_color(cx.theme().primary)
-                                            .bg(cx.theme().primary.opacity(0.15))
-                                            .justify_center()
-                                            .items_center()
-                                            .shadow_md()
-                                            .when(hub_icon_sz >= 7.0 || hub_title_sz >= 7.0, |hub| {
-                                                hub.child(
-                                                    h_flex()
-                                                        .items_center()
-                                                        .gap(px(hub_gap))
-                                                        .when(hub_icon_sz >= 7.0, |h| {
-                                                            h.child(
+                                        match hub_lod {
+                                            ZoomLodTier::Macro => {
+                                                v_flex()
+                                                    .absolute()
+                                                    .left(px(hub_x))
+                                                    .top(px(hub_y))
+                                                    .w(px(hub_w))
+                                                    .h(px(hub_h))
+                                                    .rounded_full()
+                                                    .border_2()
+                                                    .border_color(cx.theme().primary)
+                                                    .bg(cx.theme().primary.opacity(0.40))
+                                                    .shadow_md()
+                                                    .into_any_element()
+                                            }
+                                            ZoomLodTier::Overview => {
+                                                v_flex()
+                                                    .absolute()
+                                                    .left(px(hub_x))
+                                                    .top(px(hub_y))
+                                                    .w(px(hub_w))
+                                                    .h(px(hub_h))
+                                                    .px(px(hub_pad_h))
+                                                    .py(px(hub_pad_v))
+                                                    .gap(px(hub_gap))
+                                                    .rounded_full()
+                                                    .border_2()
+                                                    .border_color(cx.theme().primary)
+                                                    .bg(cx.theme().primary.opacity(0.20))
+                                                    .justify_center()
+                                                    .items_center()
+                                                    .shadow_md()
+                                                    .child(
+                                                        Icon::new(IconName::FolderOpen)
+                                                            .size(px(hub_icon_sz))
+                                                            .text_color(cx.theme().primary),
+                                                    )
+                                                    .child(
+                                                        Label::new(format!(
+                                                            "{} items",
+                                                            layout.root_node.children.len()
+                                                        ))
+                                                        .text_size(px(hub_sub_sz))
+                                                        .text_color(cx.theme().muted_foreground),
+                                                    )
+                                                    .into_any_element()
+                                            }
+                                            ZoomLodTier::Standard | ZoomLodTier::Detailed => {
+                                                v_flex()
+                                                    .absolute()
+                                                    .left(px(hub_x))
+                                                    .top(px(hub_y))
+                                                    .w(px(hub_w))
+                                                    .h(px(hub_h))
+                                                    .px(px(hub_pad_h))
+                                                    .py(px(hub_pad_v))
+                                                    .gap(px(hub_gap))
+                                                    .rounded_full()
+                                                    .border_2()
+                                                    .border_color(cx.theme().primary)
+                                                    .bg(cx.theme().primary.opacity(0.15))
+                                                    .justify_center()
+                                                    .items_center()
+                                                    .shadow_md()
+                                                    .child(
+                                                        h_flex()
+                                                            .items_center()
+                                                            .gap(px(hub_gap))
+                                                            .child(
                                                                 Icon::new(IconName::FolderOpen)
                                                                     .size(px(hub_icon_sz))
                                                                     .text_color(cx.theme().primary),
                                                             )
-                                                        })
-                                                        .when(hub_title_sz >= 7.0, |h| {
-                                                            h.child(
+                                                            .child(
                                                                 Label::new("Hub")
                                                                     .font_bold()
                                                                     .text_size(px(hub_title_sz))
                                                                     .text_color(cx.theme().primary),
-                                                            )
-                                                        }),
-                                                )
-                                            })
-                                            .when(hub_sub_sz >= 7.0, |hub| {
-                                                hub.child(
-                                                    Label::new(format!(
-                                                        "{} items",
-                                                        layout.root_node.children.len()
-                                                    ))
-                                                    .text_size(px(hub_sub_sz))
-                                                    .text_color(cx.theme().muted_foreground),
-                                                )
-                                            })
+                                                            ),
+                                                    )
+                                                    .child(
+                                                        Label::new(format!(
+                                                            "{} items",
+                                                            layout.root_node.children.len()
+                                                        ))
+                                                        .text_size(px(hub_sub_sz))
+                                                        .text_color(cx.theme().muted_foreground),
+                                                    )
+                                                    .into_any_element()
+                                            }
+                                        }
                                     })
                                     .children(node_elements),
                             )

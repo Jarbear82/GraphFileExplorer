@@ -1,33 +1,50 @@
-use gpui::prelude::*;
-use gpui::{Context, Entity, IntoElement, ParentElement, Render, Styled, Window, px};
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::{ActiveTheme, Disableable, StyledExt, h_flex, label::Label};
 use std::path::{Path, PathBuf};
+use gpui::prelude::*;
+use gpui::{Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Window, div, px};
+use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::input::{Input, InputState};
+use gpui_component::{ActiveTheme, Disableable, StyledExt, h_flex, label::Label};
 
 use crate::workspace::Workspace;
 
 pub struct Breadcrumbs {
     workspace: Entity<Workspace>,
+    focus_handle: FocusHandle,
+    search_input: Entity<InputState>,
 }
 
 impl Breadcrumbs {
     pub fn new(
         workspace: Entity<Workspace>,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> Self {
-        Self { workspace }
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("🔍 Filter items..."));
+
+        Self {
+            workspace,
+            focus_handle: cx.focus_handle(),
+            search_input,
+        }
+    }
+}
+
+impl Focusable for Breadcrumbs {
+    fn focus_handle(&self, _: &gpui::App) -> FocusHandle {
+        self.focus_handle.clone()
     }
 }
 
 impl Render for Breadcrumbs {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (current_path, root_path, can_go_up, show_hidden) = {
+        let (current_path, root_path, can_go_up, can_go_back, can_go_forward, show_hidden) = {
             let ws = self.workspace.read(cx);
             (
                 ws.current_path.clone(),
                 ws.root_path.clone(),
                 ws.current_path.parent().is_some() && ws.current_path != ws.root_path,
+                ws.can_go_back(),
+                ws.can_go_forward(),
                 ws.show_hidden,
             )
         };
@@ -61,84 +78,150 @@ impl Render for Breadcrumbs {
 
         h_flex()
             .w_full()
-            .h(px(36.0))
+            .h(px(38.0))
             .px_3()
             .py_1()
-            .gap_1()
+            .gap_1p5()
             .items_center()
+            .justify_between()
             .bg(cx.theme().secondary.opacity(0.35))
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(
-                Button::new("btn-nav-up")
-                    .label("▲ Up")
-                    .disabled(!can_go_up)
-                    .on_click(cx.listener(move |_this, _event, _window, cx| {
-                        ws.update(cx, |ws, cx| {
-                            ws.navigate_up(cx);
-                        });
-                    })),
-            )
+            // Left: History Navigation + Clickable Ancestor Crumbs
             .child(
                 h_flex()
-                    .flex_1()
                     .items_center()
                     .gap_1()
-                    .overflow_hidden()
-                    .children(segments.into_iter().enumerate().map(|(idx, (name, path))| {
-                        let ws = self.workspace.clone();
-                        let target_path = path.clone();
-                        let is_last = target_path == current_path;
-
+                    // History Back
+                    .child(
+                        Button::new("btn-nav-back")
+                            .label("◀")
+                            .ghost()
+                            .disabled(!can_go_back)
+                            .on_click(cx.listener({
+                                let ws = ws.clone();
+                                move |_this, _event, _window, cx| {
+                                    ws.update(cx, |ws, cx| {
+                                        ws.navigate_back(cx);
+                                    });
+                                }
+                            })),
+                    )
+                    // History Forward
+                    .child(
+                        Button::new("btn-nav-forward")
+                            .label("▶")
+                            .ghost()
+                            .disabled(!can_go_forward)
+                            .on_click(cx.listener({
+                                let ws = ws.clone();
+                                move |_this, _event, _window, cx| {
+                                    ws.update(cx, |ws, cx| {
+                                        ws.navigate_forward(cx);
+                                    });
+                                }
+                            })),
+                    )
+                    // Up to parent
+                    .child(
+                        Button::new("btn-nav-up")
+                            .label("▲ Up")
+                            .ghost()
+                            .disabled(!can_go_up)
+                            .on_click(cx.listener({
+                                let ws = ws.clone();
+                                move |_this, _event, _window, cx| {
+                                    ws.update(cx, |ws, cx| {
+                                        ws.navigate_up(cx);
+                                    });
+                                }
+                            })),
+                    )
+                    .child(div().w(px(1.0)).h(px(18.0)).bg(cx.theme().border).mx_1())
+                    // Clickable Breadcrumbs Segments
+                    .child(
                         h_flex()
                             .items_center()
                             .gap_1()
-                            .when(idx > 0, |el| {
-                                el.child(Label::new("/").text_color(cx.theme().muted_foreground))
-                            })
-                            .child(
-                                Button::new(format!("crumb-{}", path.display()))
-                                    .label(name)
-                                    .ghost()
-                                    .when(is_last, |b| b.font_bold())
-                                    .on_click(cx.listener(move |_this, _event, _window, cx| {
-                                        let target = target_path.clone();
-                                        ws.update(cx, |ws, cx| {
-                                            ws.drill_down(target, cx);
-                                        });
-                                    })),
-                            )
-                    })),
+                            .children(segments.into_iter().enumerate().map(|(idx, (name, path))| {
+                                let is_last = path == current_path;
+                                let ws_crumb = ws.clone();
+                                let target_path = path.clone();
+
+                                h_flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .when(idx > 0, |el| {
+                                        el.child(Label::new("/").text_xs().text_color(cx.theme().muted_foreground))
+                                    })
+                                    .child(
+                                        Button::new(format!("crumb-{}", idx))
+                                            .label(name)
+                                            .ghost()
+                                            .when(is_last, |b| b.font_bold().border_b_2().border_color(cx.theme().primary))
+                                            .on_click(cx.listener(move |_this, _event, _window, cx| {
+                                                if !is_last {
+                                                    let p = target_path.clone();
+                                                    ws_crumb.update(cx, |ws, cx| {
+                                                        ws.drill_down(p, cx);
+                                                    });
+                                                }
+                                            })),
+                                    )
+                            })),
+                    ),
             )
+            // Right: Live Filter Input + Toggles & Refresh
             .child(
-                Button::new("btn-toggle-hidden")
-                    .label(if show_hidden {
-                        "Hidden: ON"
-                    } else {
-                        "Hidden: OFF"
-                    })
-                    .ghost()
-                    .on_click(cx.listener({
-                        let ws = self.workspace.clone();
-                        move |_this, _event, _window, cx| {
-                            ws.update(cx, |ws, cx| {
-                                ws.toggle_hidden(cx);
-                            });
-                        }
-                    })),
-            )
-            .child(
-                Button::new("btn-refresh")
-                    .label("↻")
-                    .ghost()
-                    .on_click(cx.listener({
-                        let ws = self.workspace.clone();
-                        move |_this, _event, _window, cx| {
-                            ws.update(cx, |ws, cx| {
-                                ws.refresh(cx);
-                            });
-                        }
-                    })),
+                h_flex()
+                    .items_center()
+                    .gap_1p5()
+                    .child(
+                        div()
+                            .w(px(180.0))
+                            .child(Input::new(&self.search_input).cleanable(true)),
+                    )
+                    .child(
+                        Button::new("btn-toggle-filter")
+                            .label("Filter")
+                            .ghost()
+                            .on_click(cx.listener({
+                                let ws = ws.clone();
+                                let input = self.search_input.clone();
+                                move |_this, _event, _window, cx| {
+                                    let query = input.read(cx).text().to_string();
+                                    ws.update(cx, |ws, cx| {
+                                        ws.set_filter_query(query, cx);
+                                    });
+                                }
+                            })),
+                    )
+                    .child(
+                        Button::new("btn-toggle-hidden")
+                            .label(if show_hidden { "👁 Hidden: On" } else { "👁 Hidden: Off" })
+                            .ghost()
+                            .on_click(cx.listener({
+                                let ws = ws.clone();
+                                move |_this, _event, _window, cx| {
+                                    ws.update(cx, |ws, cx| {
+                                        ws.toggle_hidden(cx);
+                                    });
+                                }
+                            })),
+                    )
+                    .child(
+                        Button::new("btn-refresh")
+                            .label("🔄")
+                            .ghost()
+                            .on_click(cx.listener({
+                                let ws = ws.clone();
+                                move |_this, _event, _window, cx| {
+                                    ws.update(cx, |ws, cx| {
+                                        ws.refresh(cx);
+                                    });
+                                }
+                            })),
+                    ),
             )
     }
 }

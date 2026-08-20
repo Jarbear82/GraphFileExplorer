@@ -23,6 +23,8 @@ pub struct Workspace {
     pub recent_paths: Vec<PathBuf>,
     pub is_loading: bool,
     pub status_message: Option<String>,
+    pub history_back: Vec<PathBuf>,
+    pub history_forward: Vec<PathBuf>,
     pub dock_area: Entity<DockArea>,
     pub dock_skin: Rc<DockSkin>,
 }
@@ -47,6 +49,8 @@ impl Workspace {
             recent_paths: vec![root_path.clone()],
             is_loading: false,
             status_message: Some(format!("Opened {}", root_path.display())),
+            history_back: Vec::new(),
+            history_forward: Vec::new(),
             dock_area,
             dock_skin,
         };
@@ -59,54 +63,78 @@ impl Workspace {
         self.is_loading = true;
         let path = self.current_path.clone();
         let show_hidden = self.show_hidden;
+        let filter = self.filter_query.to_lowercase();
 
-        // Lazy load: depth 2 for direct children and their mini-previews
-        let entry = FsEntry::from_path(&path, true, 2, show_hidden);
-        
-        // Filter children if filter query is active
-        let filtered_entry = if self.filter_query.is_empty() {
-            entry
-        } else {
-            let mut f = entry.clone();
-            let q = self.filter_query.to_lowercase();
-            f.children.retain(|c| c.name.to_lowercase().contains(&q));
-            f.item_count = f.children.len();
-            f
-        };
+        let mut root_entry = FsEntry::from_path(&path, false, 0, show_hidden);
+        root_entry.load_children(2, show_hidden);
 
-        // Recompute top-down layout
+        if !filter.is_empty() {
+            root_entry.children.retain(|c| c.name.to_lowercase().contains(&filter));
+        }
+
         let engine = create_layout_engine(self.layout_kind);
-        let layout = engine.compute_layout(&filtered_entry, 900.0, 600.0, &self.layout_options);
+        let layout = engine.compute_layout(&root_entry, 1000.0, 700.0, &self.layout_options);
 
-        self.current_entry = Some(filtered_entry);
+        self.current_entry = Some(root_entry);
         self.layout_result = Some(layout);
         self.is_loading = false;
+
         cx.notify();
     }
 
+    pub fn can_go_back(&self) -> bool {
+        !self.history_back.is_empty()
+    }
+
+    pub fn can_go_forward(&self) -> bool {
+        !self.history_forward.is_empty()
+    }
+
+    pub fn navigate_back(&mut self, cx: &mut Context<Self>) {
+        if let Some(prev) = self.history_back.pop() {
+            self.history_forward.push(self.current_path.clone());
+            self.current_path = prev;
+            self.selected_path = None;
+            self.status_message = Some(format!("Navigated back to {}", self.current_path.display()));
+            self.load_current_directory(cx);
+        }
+    }
+
+    pub fn navigate_forward(&mut self, cx: &mut Context<Self>) {
+        if let Some(next) = self.history_forward.pop() {
+            self.history_back.push(self.current_path.clone());
+            self.current_path = next;
+            self.selected_path = None;
+            self.status_message = Some(format!("Navigated forward to {}", self.current_path.display()));
+            self.load_current_directory(cx);
+        }
+    }
+
     pub fn open_root(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if !path.exists() || !path.is_dir() {
-            return;
-        }
-
-        if !self.recent_paths.contains(&path) {
-            self.recent_paths.insert(0, path.clone());
-            if self.recent_paths.len() > 10 {
-                self.recent_paths.pop();
+        if path.is_dir() {
+            if path != self.current_path {
+                self.history_back.push(self.current_path.clone());
+                self.history_forward.clear();
             }
+            self.root_path = path.clone();
+            self.current_path = path.clone();
+            self.selected_path = None;
+            if !self.recent_paths.contains(&path) {
+                self.recent_paths.insert(0, path.clone());
+            }
+            self.status_message = Some(format!("Opened root: {}", path.display()));
+            self.load_current_directory(cx);
         }
-
-        self.root_path = path.clone();
-        self.current_path = path;
-        self.selected_path = None;
-        self.filter_query.clear();
-        self.status_message = Some(format!("Workspace root changed to {}", self.root_path.display()));
-        self.load_current_directory(cx);
     }
 
     pub fn drill_down(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if !path.exists() || !path.is_dir() {
+        if !path.is_dir() {
             return;
+        }
+
+        if path != self.current_path {
+            self.history_back.push(self.current_path.clone());
+            self.history_forward.clear();
         }
 
         self.current_path = path;
@@ -117,13 +145,16 @@ impl Workspace {
     }
 
     pub fn navigate_up(&mut self, cx: &mut Context<Self>) {
-        if let Some(parent) = self.current_path.parent() {
-            let parent_buf = parent.to_path_buf();
-            self.current_path = parent_buf;
-            self.selected_path = None;
-            self.filter_query.clear();
-            self.status_message = Some(format!("Navigated up to {}", self.current_path.display()));
-            self.load_current_directory(cx);
+        if let Some(parent) = self.current_path.parent().map(|p| p.to_path_buf()) {
+            if parent != self.current_path {
+                self.history_back.push(self.current_path.clone());
+                self.history_forward.clear();
+                self.current_path = parent;
+                self.selected_path = None;
+                self.filter_query.clear();
+                self.status_message = Some(format!("Navigated up to {}", self.current_path.display()));
+                self.load_current_directory(cx);
+            }
         }
     }
 
@@ -228,6 +259,17 @@ impl Workspace {
 
     pub fn reveal_in_file_manager(path: &Path) {
         let parent = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
-        Self::open_in_system_editor(parent);
+        #[cfg(target_os = "linux")]
+        {
+            let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("open").arg(parent).spawn();
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let _ = std::process::Command::new("explorer").arg(parent).spawn();
+        }
     }
 }

@@ -3,15 +3,15 @@ use std::path::PathBuf;
 use gpui::prelude::*;
 use gpui::{
     Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
-    ParentElement, Render, Styled, Window, div,
+    ParentElement, Render, Styled, Window, div, px,
 };
 use gpui_component::dock::{BasePanel, Panel, PanelEvent};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{
-    ActiveTheme, StyledExt, h_flex, label::Label, v_flex,
+    ActiveTheme, IconName, StyledExt, h_flex, label::Label, v_flex,
 };
 
-use crate::model::fs_entry::FsEntry;
+use crate::model::fs_entry::{format_bytes, FsEntry};
 use crate::workspace::Workspace;
 
 pub struct InspectorPanel {
@@ -78,7 +78,7 @@ impl Render for InspectorPanel {
             .gap_3()
             .overflow_y_scroll()
             .bg(cx.theme().background)
-            // Header card
+            // Header Card
             .child(
                 v_flex()
                     .w_full()
@@ -87,7 +87,7 @@ impl Render for InspectorPanel {
                     .rounded_md()
                     .border_1()
                     .border_color(cx.theme().border)
-                    .bg(cx.theme().secondary.opacity(0.3))
+                    .bg(cx.theme().secondary.opacity(0.35))
                     .child(
                         h_flex()
                             .items_center()
@@ -96,22 +96,35 @@ impl Render for InspectorPanel {
                                 h_flex()
                                     .items_center()
                                     .gap_2()
-                                    .child(
-                                        div()
-                                            .px_2()
-                                            .py_0p5()
-                                            .rounded_sm()
-                                            .bg(cx.theme().primary.opacity(0.15))
-                                            .text_xs()
-                                            .font_bold()
-                                            .text_color(cx.theme().primary)
-                                            .child(entry.category.display_badge()),
-                                    )
+                                    .child(if entry.is_dir {
+                                        IconName::Folder
+                                    } else {
+                                        IconName::File
+                                    })
                                     .child(
                                         Label::new(entry.name.clone())
                                             .font_bold()
                                             .text_sm(),
                                     ),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded_sm()
+                                    .text_xs()
+                                    .font_bold()
+                                    .bg(if entry.is_dir {
+                                        cx.theme().secondary
+                                    } else {
+                                        cx.theme().primary.opacity(0.18)
+                                    })
+                                    .text_color(if entry.is_dir {
+                                        cx.theme().foreground
+                                    } else {
+                                        cx.theme().primary
+                                    })
+                                    .child(entry.category.display_badge()),
                             ),
                     )
                     .child(
@@ -120,65 +133,34 @@ impl Render for InspectorPanel {
                             .text_color(cx.theme().muted_foreground),
                     ),
             )
-            // Metadata table
+            // Quick Action Buttons Bar
             .child(
-                v_flex()
+                h_flex()
                     .w_full()
-                    .p_3()
-                    .gap_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .child(Label::new("Properties").font_bold().text_xs())
+                    .gap_1p5()
+                    .flex_wrap()
                     .child(
-                        h_flex()
-                            .justify_between()
-                            .text_xs()
-                            .child(Label::new("Type:").text_color(cx.theme().muted_foreground))
-                            .child(Label::new(if entry.is_dir { "Directory" } else { "File" })),
-                    )
-                    .child(
-                        h_flex()
-                            .justify_between()
-                            .text_xs()
-                            .child(Label::new("Size:").text_color(cx.theme().muted_foreground))
-                            .child(Label::new(entry.format_size())),
-                    )
-                    .child(
-                        h_flex()
-                            .justify_between()
-                            .text_xs()
-                            .child(Label::new("Modified:").text_color(cx.theme().muted_foreground))
-                            .child(Label::new(entry.format_modified())),
-                    )
-                    .when(entry.is_dir, |el| {
-                        el.child(
-                            h_flex()
-                                .justify_between()
-                                .text_xs()
-                                .child(Label::new("Items:").text_color(cx.theme().muted_foreground))
-                                .child(Label::new(format!("{} children", entry.item_count))),
-                        )
-                    }),
-            )
-            // Action Buttons
-            .child(
-                v_flex()
-                    .w_full()
-                    .gap_2()
-                    .child(
-                        Button::new("btn-open-system")
-                            .label("Open in Default App")
+                        Button::new("btn-inspect-open")
+                            .label(if entry.is_dir { "➔ Drill In" } else { "⚡ Open Editor" })
+                            .primary()
                             .on_click(cx.listener({
                                 let p = target_path.clone();
-                                move |_this, _event, _window, _cx| {
-                                    Workspace::open_in_system_editor(&p);
+                                let is_dir = entry.is_dir;
+                                let ws_open = ws.clone();
+                                move |_this, _event, _window, cx| {
+                                    if is_dir {
+                                        ws_open.update(cx, |ws, cx| {
+                                            ws.drill_down(p.clone(), cx);
+                                        });
+                                    } else {
+                                        Workspace::open_in_system_editor(&p);
+                                    }
                                 }
                             })),
                     )
                     .child(
-                        Button::new("btn-reveal-fm")
-                            .label("Reveal in File Manager")
+                        Button::new("btn-inspect-reveal")
+                            .label("📁 Reveal")
                             .ghost()
                             .on_click(cx.listener({
                                 let p = target_path.clone();
@@ -187,76 +169,170 @@ impl Render for InspectorPanel {
                                 }
                             })),
                     )
-                    .when(selected_path.is_some(), |el| {
-                        let ws_del = ws.clone();
-                        let p_del = target_path.clone();
-                        el.child(
-                            Button::new("btn-delete-node")
-                                .label("Delete Item")
-                                .ghost()
-                                .on_click(cx.listener(move |_this, _event, _window, cx| {
-                                    let target = p_del.clone();
+                    .child(
+                        Button::new("btn-inspect-copy")
+                            .label("📋 Copy Path")
+                            .ghost()
+                            .on_click(cx.listener({
+                                let p = target_path.clone();
+                                move |_this, _event, _window, cx| {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(p.to_string_lossy().to_string()));
+                                }
+                            })),
+                    )
+                    .child(
+                        Button::new("btn-inspect-delete")
+                            .label("🗑 Delete")
+                            .ghost()
+                            .on_click(cx.listener({
+                                let p = target_path.clone();
+                                let ws_del = ws.clone();
+                                move |_this, _event, _window, cx| {
                                     ws_del.update(cx, |ws, cx| {
-                                        let _ = ws.delete_entry(&target, cx);
+                                        let _ = ws.delete_entry(&p, cx);
                                     });
-                                })),
-                        )
-                    }),
+                                }
+                            })),
+                    ),
             )
-            // Preview section
+            // Metadata Properties Card
             .child(
                 v_flex()
                     .w_full()
-                    .flex_1()
                     .p_3()
                     .gap_2()
                     .rounded_md()
                     .border_1()
                     .border_color(cx.theme().border)
                     .bg(cx.theme().secondary.opacity(0.15))
+                    .child(Label::new("Properties").font_bold().text_xs())
                     .child(
                         h_flex()
                             .justify_between()
-                            .items_center()
-                            .child(Label::new("Content Preview").font_bold().text_xs()),
+                            .child(Label::new("Size").text_xs().text_color(cx.theme().muted_foreground))
+                            .child(Label::new(if entry.is_dir { format!("{} items", entry.item_count) } else { format_bytes(entry.size_bytes) }).text_xs().font_semibold()),
                     )
-                    .child({
-                        if entry.is_dir {
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .child(Label::new("Type").text_xs().text_color(cx.theme().muted_foreground))
+                            .child(Label::new(format!("{:?}", entry.category)).text_xs()),
+                    )
+                    .when_some(entry.extension, |el, ext| {
+                        el.child(
+                            h_flex()
+                                .justify_between()
+                                .child(Label::new("Extension").text_xs().text_color(cx.theme().muted_foreground))
+                                .child(Label::new(format!(".{ext}")).text_xs()),
+                        )
+                    })
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .child(Label::new("Symlink").text_xs().text_color(cx.theme().muted_foreground))
+                            .child(Label::new(if entry.is_symlink { "Yes" } else { "No" }).text_xs()),
+                    ),
+            )
+            // Code & Text Syntax-Highlighted Preview (or Directory Contents summary)
+            .child(
+                if !entry.is_dir {
+                    let preview = Self::read_preview_lines(&entry.path, 150);
+                    v_flex()
+                        .w_full()
+                        .gap_1()
+                        .child(
+                            h_flex()
+                                .items_center()
+                                .justify_between()
+                                .child(Label::new("File Content Preview").font_bold().text_xs())
+                                .child(
+                                    Label::new(format!("Previewing {} lines", preview.as_ref().map(|p| p.len()).unwrap_or(0)))
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id("file-preview-scroll-box")
+                                .w_full()
+                                .max_h(px(320.0))
+                                .p_2()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(cx.theme().border)
+                                .bg(cx.theme().background)
+                                .overflow_y_scroll()
+                                .child(
+                                    if let Some(lines) = preview {
+                                        if lines.is_empty() {
+                                            Label::new("(Empty file)").text_xs().text_color(cx.theme().muted_foreground).into_any_element()
+                                        } else {
+                                            v_flex()
+                                                .w_full()
+                                                .gap_0p5()
+                                                .children(lines.into_iter().enumerate().map(|(num, line)| {
+                                                    h_flex()
+                                                        .w_full()
+                                                        .gap_2()
+                                                        .child(
+                                                            div()
+                                                                .w(px(32.0))
+                                                                .text_right()
+                                                                .text_xs()
+                                                                .text_color(cx.theme().muted_foreground.opacity(0.6))
+                                                                .child(format!("{}", num + 1)),
+                                                        )
+                                                        .child(
+                                                            Label::new(line)
+                                                                .text_xs(),
+                                                        )
+                                                }))
+                                                .into_any_element()
+                                        }
+                                    } else {
+                                        Label::new("(Binary or non-UTF8 file)").text_xs().text_color(cx.theme().muted_foreground).into_any_element()
+                                    }
+                                ),
+                        )
+                        .into_any_element()
+                } else {
+                    v_flex()
+                        .w_full()
+                        .gap_1()
+                        .child(Label::new(format!("Folder Items ({})", entry.children.len())).font_bold().text_xs())
+                        .child(
                             v_flex()
+                                .id("folder-children-scroll-box")
+                                .w_full()
+                                .max_h(px(240.0))
+                                .p_2()
                                 .gap_1()
-                                .children(entry.children.iter().take(20).map(|c| {
+                                .rounded_md()
+                                .border_1()
+                                .border_color(cx.theme().border)
+                                .bg(cx.theme().secondary.opacity(0.15))
+                                .overflow_y_scroll()
+                                .children(entry.children.iter().map(|child| {
                                     h_flex()
+                                        .w_full()
+                                        .items_center()
                                         .justify_between()
-                                        .text_xs()
-                                        .child(Label::new(format!(
-                                            "{} {}",
-                                            if c.is_dir { "📁" } else { "📄" },
-                                            c.name
-                                        )))
-                                        .child(Label::new(c.format_size()).text_color(cx.theme().muted_foreground))
-                                }))
-                                .into_any_element()
-                        } else if let Some(lines) = Self::read_preview_lines(&target_path, 40) {
-                            v_flex()
-                                .gap_0p5()
-                                .children(lines.into_iter().enumerate().map(|(line_no, line)| {
-                                    h_flex()
-                                        .gap_2()
-                                        .text_xs()
                                         .child(
-                                            Label::new(format!("{:3}", line_no + 1))
-                                                .text_color(cx.theme().muted_foreground.opacity(0.5)),
+                                            h_flex()
+                                                .items_center()
+                                                .gap_1p5()
+                                                .child(if child.is_dir { IconName::Folder } else { IconName::File })
+                                                .child(Label::new(child.name.clone()).text_xs()),
                                         )
-                                        .child(Label::new(line))
-                                }))
-                                .into_any_element()
-                        } else {
-                            Label::new("Binary or non-UTF-8 file.")
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .into_any_element()
-                        }
-                    }),
+                                        .child(
+                                            Label::new(if child.is_dir { "DIR".to_string() } else { format_bytes(child.size_bytes) })
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground),
+                                        )
+                                })),
+                        )
+                        .into_any_element()
+                }
             )
     }
 }

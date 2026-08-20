@@ -79,6 +79,7 @@ impl GraphView {
     fn render_nested_preview(&self, node: &LayoutNode, cx: &mut Context<Self>) -> impl IntoElement {
         let max_show = 4;
         let preview_items = node.children.iter().take(max_show);
+        let ws = self.workspace.clone();
 
         h_flex()
             .w_full()
@@ -90,22 +91,41 @@ impl GraphView {
             .border_1()
             .border_color(cx.theme().border.opacity(0.5))
             .children(preview_items.map(|child| {
+                let ws_sub = ws.clone();
+                let child_path = child.path.clone();
+                let child_is_dir = child.is_dir;
+
                 div()
-                    .px_1()
+                    .id(format!("pill-{}", child_path.display()))
+                    .px_1p5()
                     .py_0p5()
                     .rounded_sm()
-                    .bg(if child.is_dir {
+                    .cursor_pointer()
+                    .bg(if child_is_dir {
                         cx.theme().secondary.opacity(0.8)
                     } else {
                         cx.theme().primary.opacity(0.12)
                     })
+                    .hover(|s| s.bg(cx.theme().primary.opacity(0.35)))
+                    .on_click(cx.listener({
+                        let p = child_path.clone();
+                        move |_this, _event, _window, cx| {
+                            ws_sub.update(cx, |ws, cx| {
+                                if child_is_dir {
+                                    ws.drill_down(p.clone(), cx);
+                                } else {
+                                    ws.select_path(Some(p.clone()), cx);
+                                }
+                            });
+                        }
+                    }))
                     .text_xs()
-                    .text_color(if child.is_dir {
+                    .text_color(if child_is_dir {
                         cx.theme().foreground
                     } else {
                         cx.theme().primary
                     })
-                    .child(if child.is_dir {
+                    .child(if child_is_dir {
                         format!("📁 {}", child.name)
                     } else {
                         format!("📄 {}", child.name)

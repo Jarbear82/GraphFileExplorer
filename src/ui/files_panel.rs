@@ -1,162 +1,105 @@
-use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
+    Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
     Render, Styled, Window, div, px,
 };
 use gpui_component::dock::{BasePanel, Panel, PanelEvent};
 use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::list::ListItem;
+use gpui_component::tree::{TreeEntry, TreeItem, TreeState, tree};
 use gpui_component::{
-    ActiveTheme, Disableable, StyledExt, h_flex, label::Label, v_flex,
+    ActiveTheme, IconName, StyledExt, h_flex, label::Label, v_flex,
 };
 
-use crate::model::fs_entry::FsEntry;
 use crate::workspace::Workspace;
+
+fn build_tree_items(root_path: &Path, show_hidden: bool, depth_limit: usize) -> Vec<TreeItem> {
+    let mut items = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(root_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.to_string_lossy().to_string());
+
+            if !show_hidden && name.starts_with('.') {
+                continue;
+            }
+
+            let id = path.to_string_lossy().to_string();
+            let is_dir = path.is_dir();
+
+            let mut item = TreeItem::new(id, name);
+            if is_dir && depth_limit > 0 {
+                let children = build_tree_items(&path, show_hidden, depth_limit - 1);
+                item = item.children(children);
+            }
+            items.push(item);
+        }
+    }
+
+    items.sort_by(|a, b| {
+        b.is_folder()
+            .cmp(&a.is_folder())
+            .then(a.label.cmp(&b.label))
+    });
+
+    items
+}
 
 pub struct FilesPanel {
     workspace: Entity<Workspace>,
     focus_handle: FocusHandle,
-    expanded_paths: HashSet<PathBuf>,
+    tree_state: Entity<TreeState>,
+    last_root: PathBuf,
 }
 
 impl FilesPanel {
     pub fn new(workspace: Entity<Workspace>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
         let root_path = workspace.read(cx).root_path.clone();
-        let mut expanded = HashSet::new();
-        expanded.insert(root_path);
+        let show_hidden = workspace.read(cx).show_hidden;
+
+        let root_name = root_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| root_path.to_string_lossy().to_string());
+
+        let root_children = build_tree_items(&root_path, show_hidden, 2);
+        let root_item = TreeItem::new(root_path.to_string_lossy().to_string(), root_name)
+            .expanded(true)
+            .children(root_children);
+
+        let tree_state = cx.new(|cx| TreeState::new(cx).items(vec![root_item]));
 
         Self {
             workspace,
             focus_handle: cx.focus_handle(),
-            expanded_paths: expanded,
+            tree_state,
+            last_root: root_path,
         }
     }
 
-    fn toggle_expand(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if self.expanded_paths.contains(&path) {
-            self.expanded_paths.remove(&path);
-        } else {
-            self.expanded_paths.insert(path);
-        }
+    pub fn reload_tree(&mut self, cx: &mut Context<Self>) {
+        let root_path = self.workspace.read(cx).root_path.clone();
+        let show_hidden = self.workspace.read(cx).show_hidden;
+
+        let root_name = root_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| root_path.to_string_lossy().to_string());
+
+        let root_children = build_tree_items(&root_path, show_hidden, 2);
+        let root_item = TreeItem::new(root_path.to_string_lossy().to_string(), root_name)
+            .expanded(true)
+            .children(root_children);
+
+        self.last_root = root_path;
+        self.tree_state.update(cx, |state, cx| {
+            state.set_items(vec![root_item], cx);
+        });
         cx.notify();
-    }
-
-    fn render_tree_node(
-        &self,
-        entry: &FsEntry,
-        depth: usize,
-        selected_path: &Option<PathBuf>,
-        current_path: &PathBuf,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let path = entry.path.clone();
-        let is_dir = entry.is_dir;
-        let is_expanded = self.expanded_paths.contains(&path);
-        let is_selected = selected_path.as_ref() == Some(&path);
-        let is_current_root = current_path == &path;
-        let indent = depth as f32 * 14.0;
-
-        let ws_click = self.workspace.clone();
-        let ws_drill = self.workspace.clone();
-        let node_path = path.clone();
-        let target_for_click = path.clone();
-        let target_for_dbl = path.clone();
-
-        let mut child_nodes = Vec::new();
-        if is_dir && is_expanded {
-            let mut dir_entry = entry.clone();
-            if !dir_entry.is_loaded {
-                dir_entry.load_children(1, false);
-            }
-            for child in &dir_entry.children {
-                child_nodes.push(self.render_tree_node(child, depth + 1, selected_path, current_path, cx));
-            }
-        }
-
-        v_flex()
-            .w_full()
-            .child(
-                h_flex()
-                    .id(format!("tree-item-{}", path.display()))
-                    .w_full()
-                    .h(px(24.0))
-                    .pl(px(indent + 6.0))
-                    .pr_2()
-                    .items_center()
-                    .justify_between()
-                    .rounded_sm()
-                    .gap_1()
-                    .hover(|s| s.bg(cx.theme().secondary.opacity(0.4)))
-                    .when(is_selected, |s| s.bg(cx.theme().primary.opacity(0.18)))
-                    .when(is_current_root, |s| s.font_bold().border_l_2().border_color(cx.theme().primary))
-                    .on_click(cx.listener(move |_this, _event, _window, cx| {
-                        let sel = target_for_click.clone();
-                        ws_click.update(cx, |ws, cx| {
-                            ws.select_path(Some(sel), cx);
-                        });
-                    }))
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .gap_1()
-                            .child(
-                                if is_dir {
-                                    div()
-                                        .id(format!("toggle-btn-{}", node_path.display()))
-                                        .w(px(14.0))
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(if is_expanded { "▼" } else { "▶" })
-                                        .on_click(cx.listener({
-                                            let p = node_path.clone();
-                                            move |this, _event, _window, cx| {
-                                                this.toggle_expand(p.clone(), cx);
-                                            }
-                                        }))
-                                        .into_any_element()
-                                } else {
-                                    div().w(px(14.0)).into_any_element()
-                                },
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .child(if is_dir { "📁" } else { "📄" }),
-                            )
-                            .child(
-                                Label::new(entry.name.clone())
-                                    .text_xs()
-                                    .text_color(if is_selected {
-                                        cx.theme().primary
-                                    } else {
-                                        cx.theme().foreground
-                                    }),
-                            ),
-                    )
-                    .child(
-                        if is_dir {
-                            Button::new(format!("btn-drill-{}", path.display()))
-                                .label("➔")
-                                .ghost()
-                                .on_click(cx.listener(move |_this, _event, _window, cx| {
-                                    let target = target_for_dbl.clone();
-                                    ws_drill.update(cx, |ws, cx| {
-                                        ws.drill_down(target, cx);
-                                    });
-                                }))
-                        } else {
-                            Button::new(format!("btn-ext-{}", path.display()))
-                                .label(entry.category.display_badge())
-                                .ghost()
-                                .disabled(true)
-                        },
-                    ),
-            )
-            .when(is_dir && is_expanded, |el| {
-                el.children(child_nodes)
-            })
-            .into_any_element()
     }
 }
 
@@ -182,21 +125,20 @@ impl Panel for FilesPanel {
 
 impl Render for FilesPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (root_path, selected_path, current_path, show_hidden) = {
+        let (root_path, _selected_path) = {
             let ws = self.workspace.read(cx);
-            (
-                ws.root_path.clone(),
-                ws.selected_path.clone(),
-                ws.current_path.clone(),
-                ws.show_hidden,
-            )
+            (ws.root_path.clone(), ws.selected_path.clone())
         };
 
-        let root_entry = FsEntry::from_path(&root_path, true, 1, show_hidden);
-        let root_node = self.render_tree_node(&root_entry, 0, &selected_path, &current_path, cx);
+        if self.last_root != root_path {
+            self.reload_tree(cx);
+        }
+
+        let ws = self.workspace.clone();
 
         v_flex()
             .size_full()
+            .overflow_hidden()
             .bg(cx.theme().background)
             // Toolbar header
             .child(
@@ -229,7 +171,7 @@ impl Render for FilesPanel {
                                     .label("+ File")
                                     .ghost()
                                     .on_click(cx.listener({
-                                        let ws = self.workspace.clone();
+                                        let ws = ws.clone();
                                         move |_this, _event, _window, cx| {
                                             ws.update(cx, |ws, cx| {
                                                 let _ = ws.create_entry("new_file.txt", false, cx);
@@ -242,7 +184,7 @@ impl Render for FilesPanel {
                                     .label("+ Folder")
                                     .ghost()
                                     .on_click(cx.listener({
-                                        let ws = self.workspace.clone();
+                                        let ws = ws.clone();
                                         move |_this, _event, _window, cx| {
                                             ws.update(cx, |ws, cx| {
                                                 let _ = ws.create_entry("new_folder", true, cx);
@@ -252,15 +194,89 @@ impl Render for FilesPanel {
                             ),
                     ),
             )
-            // Tree content
+            // Official gpui_component Tree Component (keyboard nav, expand/collapse, virtualized list)
             .child(
-                v_flex()
-                    .id("files-tree-list")
+                div()
+                    .id("tree-view-wrapper")
                     .flex_1()
-                    .w_full()
-                    .p_1()
-                    .overflow_y_scroll()
-                    .child(root_node),
+                    .min_h(px(0.0))
+                    .size_full()
+                    .overflow_hidden()
+                    .child(
+                        tree(&self.tree_state, {
+                            let ws = ws.clone();
+                            move |ix, entry: &TreeEntry, is_selected, _window, cx| {
+                                let path_str = entry.item().id.to_string();
+                                let path = PathBuf::from(&path_str);
+                                let name = entry.item().label.to_string();
+                                let is_dir = entry.is_folder();
+                                let is_expanded = entry.is_expanded();
+
+                                let icon = if !is_dir {
+                                    IconName::File
+                                } else if is_expanded {
+                                    IconName::FolderOpen
+                                } else {
+                                    IconName::Folder
+                                };
+
+                                let ws_click = ws.clone();
+                                let ws_drill = ws.clone();
+                                let p_click = path.clone();
+                                let p_drill = path.clone();
+
+                                ListItem::new(ix)
+                                    .w_full()
+                                    .h(px(26.0))
+                                    .rounded(cx.theme().radius)
+                                    .px_2()
+                                    .pl(px(14.0) * entry.depth() + px(6.0))
+                                    .selected(is_selected)
+                                    .on_click(move |_event, _window, cx| {
+                                        let p = p_click.clone();
+                                        ws_click.update(cx, |ws, cx| {
+                                            ws.select_path(Some(p), cx);
+                                        });
+                                    })
+                                    .child(
+                                        h_flex()
+                                            .w_full()
+                                            .items_center()
+                                            .justify_between()
+                                            .gap_1p5()
+                                            .child(
+                                                h_flex()
+                                                    .items_center()
+                                                    .gap_1p5()
+                                                    .child(icon)
+                                                    .child(
+                                                        Label::new(name)
+                                                            .text_xs()
+                                                            .text_color(if is_selected {
+                                                                cx.theme().primary
+                                                            } else {
+                                                                cx.theme().foreground
+                                                            }),
+                                                    ),
+                                            )
+                                            .when(is_dir, |el| {
+                                                el.child(
+                                                    Button::new(format!("btn-drill-{}", path_str))
+                                                        .label("➔")
+                                                        .ghost()
+                                                        .on_click(move |_event, _window, cx| {
+                                                            let p = p_drill.clone();
+                                                            ws_drill.update(cx, |ws, cx| {
+                                                                ws.drill_down(p, cx);
+                                                            });
+                                                        }),
+                                                )
+                                            }),
+                                    )
+                            }
+                        })
+                        .size_full(),
+                    ),
             )
     }
 }

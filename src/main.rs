@@ -59,6 +59,6 @@ fn load_and_watch_themes(cx: &mut App) {
         Theme::sync_system_appearance(None, cx);
         cx.refresh_windows();
     }) {
-        eprintln!("failed to bind themes file monitor: {err}");
+        eprintln!("failed to bind themes file monitor: {:?}", err);
     }
 }

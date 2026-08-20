@@ -1,12 +1,14 @@
-use std::path::PathBuf;
 use gpui::prelude::*;
 use gpui::{
-    Context, Entity, IntoElement, ParentElement, Render, Styled, Subscription, Window,
-    div, px,
+    Context, Entity, IntoElement, ParentElement, Render, Styled, Subscription, Window, div, px,
 };
-use gpui_component::dock::{DockLayout, DockPlacement};
 use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::{ActiveTheme, Icon, IconName, Root, Sizable, StyledExt, Theme, TitleBar, h_flex, label::Label, v_flex};
+use gpui_component::dock::DockLayout;
+use gpui_component::{
+    ActiveTheme, Icon, IconName, Root, Sizable, StyledExt, Theme, TitleBar, h_flex, label::Label,
+    v_flex,
+};
+use std::path::PathBuf;
 
 use crate::settings_content::SettingsContent;
 use crate::ui::{Breadcrumbs, FilesPanel, GraphView, InspectorPanel, StatusBar, TableView};
@@ -23,10 +25,10 @@ pub enum ViewMode {
 pub struct MainView {
     workspace: Entity<Workspace>,
     breadcrumbs: Entity<Breadcrumbs>,
-    _files_panel: Entity<FilesPanel>,
+    files_panel: Entity<FilesPanel>,
     graph_view: Entity<GraphView>,
     table_view: Entity<TableView>,
-    _inspector_panel: Entity<InspectorPanel>,
+    inspector_panel: Entity<InspectorPanel>,
     status_bar: Entity<StatusBar>,
     settings_content: Entity<SettingsContent>,
     view_mode: ViewMode,
@@ -44,38 +46,57 @@ impl MainView {
         let status_bar = cx.new(|cx| StatusBar::new(workspace.clone(), window, cx));
         let settings_content = cx.new(|cx| SettingsContent::new(window, cx));
 
-        // Configure DockArea with GraphView in center, FilesPanel in left dock, InspectorPanel in right dock
-        let dock_area = workspace.read(cx).dock_area.clone();
-        let center_layout = DockLayout::tabs().panel(graph_view.clone());
-        let left_layout = DockLayout::tabs().panel(files_panel.clone());
-        let right_layout = DockLayout::tabs().panel(inspector_panel.clone());
-
-        dock_area.update(cx, |dock, cx| {
-            dock.set_center(center_layout, window, cx);
-            dock.set_dock(DockPlacement::Left, left_layout, window, cx);
-            dock.set_dock(DockPlacement::Right, right_layout, window, cx);
-            dock.set_dock_size(DockPlacement::Left, px(260.0), window, cx);
-            dock.set_dock_size(DockPlacement::Right, px(320.0), window, cx);
-        });
-
         let subscription = window.observe_window_appearance(|window, cx| {
             Theme::sync_system_appearance(Some(window), cx);
             cx.refresh_windows();
         });
 
-        Self {
+        let mut this = Self {
             workspace,
             breadcrumbs,
-            _files_panel: files_panel,
+            files_panel,
             graph_view,
             table_view,
-            _inspector_panel: inspector_panel,
+            inspector_panel,
             status_bar,
             settings_content,
             view_mode: ViewMode::Graph,
             show_settings: false,
             _appearance_subscription: subscription,
+        };
+
+        this.apply_layout(window, cx);
+        this
+    }
+
+    fn build_center_layout(&self) -> DockLayout {
+        match self.view_mode {
+            ViewMode::Graph => DockLayout::tabs().panel(self.graph_view.clone()),
+            ViewMode::Table => DockLayout::tabs().panel(self.table_view.clone()),
+            ViewMode::Split => DockLayout::h_split()
+                .child(DockLayout::tabs().panel(self.graph_view.clone()), None)
+                .child(DockLayout::tabs().panel(self.table_view.clone()), None),
         }
+    }
+
+    pub fn apply_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let center_content = self.build_center_layout();
+        let full_layout = DockLayout::h_split()
+            .child(
+                DockLayout::tabs().panel(self.files_panel.clone()),
+                Some(px(260.0)),
+            )
+            .child(center_content, None)
+            .child(
+                DockLayout::tabs().panel(self.inspector_panel.clone()),
+                Some(px(320.0)),
+            );
+
+        let dock_area = self.workspace.read(cx).dock_area.clone();
+        dock_area.update(cx, |dock, cx| {
+            dock.set_center(full_layout, window, cx);
+        });
+        cx.notify();
     }
 
     pub fn set_view_mode(&mut self, mode: ViewMode, window: &mut Window, cx: &mut Context<Self>) {
@@ -83,21 +104,7 @@ impl MainView {
             return;
         }
         self.view_mode = mode;
-
-        let dock_area = self.workspace.read(cx).dock_area.clone();
-        let center_layout = match mode {
-            ViewMode::Graph => DockLayout::tabs().panel(self.graph_view.clone()),
-            ViewMode::Table => DockLayout::tabs().panel(self.table_view.clone()),
-            ViewMode::Split => DockLayout::h_split()
-                .child(DockLayout::tabs().panel(self.graph_view.clone()), None)
-                .child(DockLayout::tabs().panel(self.table_view.clone()), None),
-        };
-
-        dock_area.update(cx, |dock, cx| {
-            dock.set_center(center_layout, window, cx);
-        });
-
-        cx.notify();
+        self.apply_layout(window, cx);
     }
 }
 
@@ -116,7 +123,11 @@ impl Render for MainView {
                         h_flex()
                             .items_center()
                             .gap_2()
-                            .child(Icon::new(IconName::LayoutDashboard).small().text_color(cx.theme().primary))
+                            .child(
+                                Icon::new(IconName::LayoutDashboard)
+                                    .small()
+                                    .text_color(cx.theme().primary),
+                            )
                             .child(Label::new("Graph File Explorer").font_bold())
                             .child(
                                 Button::new("btn-open-workspace")
@@ -145,7 +156,9 @@ impl Render for MainView {
                                     .icon(IconName::LayoutDashboard)
                                     .label("Graph")
                                     .ghost()
-                                    .when(view_mode == ViewMode::Graph, |b| b.font_bold().border_1())
+                                    .when(view_mode == ViewMode::Graph, |b| {
+                                        b.font_bold().border_1()
+                                    })
                                     .on_click(cx.listener(|this, _event, window, cx| {
                                         this.set_view_mode(ViewMode::Graph, window, cx);
                                     })),
@@ -155,7 +168,9 @@ impl Render for MainView {
                                     .icon(IconName::Frame)
                                     .label("Table")
                                     .ghost()
-                                    .when(view_mode == ViewMode::Table, |b| b.font_bold().border_1())
+                                    .when(view_mode == ViewMode::Table, |b| {
+                                        b.font_bold().border_1()
+                                    })
                                     .on_click(cx.listener(|this, _event, window, cx| {
                                         this.set_view_mode(ViewMode::Table, window, cx);
                                     })),
@@ -165,7 +180,9 @@ impl Render for MainView {
                                     .icon(IconName::PanelLeft)
                                     .label("Split")
                                     .ghost()
-                                    .when(view_mode == ViewMode::Split, |b| b.font_bold().border_1())
+                                    .when(view_mode == ViewMode::Split, |b| {
+                                        b.font_bold().border_1()
+                                    })
                                     .on_click(cx.listener(|this, _event, window, cx| {
                                         this.set_view_mode(ViewMode::Split, window, cx);
                                     })),
@@ -186,28 +203,33 @@ impl Render for MainView {
                     ),
             )
             .child(
-                div().flex_1().min_h(px(0.0)).size_full().overflow_hidden().child(if self.show_settings {
-                    self.settings_content.clone().into_any_element()
-                } else {
-                    v_flex()
-                        .size_full()
-                        .overflow_hidden()
-                        // Top Breadcrumbs Bar
-                        .child(self.breadcrumbs.clone().into_any_element())
-                        // Native gpui_component DockArea (resizable splits, collapsible sidebars, draggable tabs)
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .min_h(px(0.0))
-                                .size_full()
-                                .overflow_hidden()
-                                .child(dock_area.into_any_element()),
-                        )
-                        // Bottom Status Bar
-                        .child(self.status_bar.clone().into_any_element())
-                        .into_any_element()
-                }),
+                div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .size_full()
+                    .overflow_hidden()
+                    .child(if self.show_settings {
+                        self.settings_content.clone().into_any_element()
+                    } else {
+                        v_flex()
+                            .size_full()
+                            .overflow_hidden()
+                            // Top Breadcrumbs Bar
+                            .child(self.breadcrumbs.clone().into_any_element())
+                            // Native gpui_component DockArea (3-column resizable splits: Files | View Mode | Inspector)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .min_h(px(0.0))
+                                    .size_full()
+                                    .overflow_hidden()
+                                    .child(dock_area.into_any_element()),
+                            )
+                            // Bottom Status Bar
+                            .child(self.status_bar.clone().into_any_element())
+                            .into_any_element()
+                    }),
             )
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_sheet_layer(window, cx))

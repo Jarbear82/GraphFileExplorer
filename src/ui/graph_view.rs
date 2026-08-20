@@ -1,19 +1,26 @@
 use gpui::prelude::*;
 use gpui::{
     Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent,
-    ParentElement, Render, Styled, Window, div, px,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollDelta, ScrollWheelEvent,
+    MouseButton, ParentElement, Render, Styled, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{
     ActiveTheme, Disableable, StyledExt, h_flex, label::Label, v_flex,
 };
 
-use crate::model::layout::{LayoutKind, LayoutNode};
+use crate::model::layout::{LayoutKind, LayoutNode, LayoutResult};
 use crate::workspace::Workspace;
 
 pub struct GraphView {
     workspace: Entity<Workspace>,
     focus_handle: FocusHandle,
+    zoom: f32,
+    pan_x: f32,
+    pan_y: f32,
+    is_dragging: bool,
+    drag_start: Option<(f32, f32)>,
+    drag_initial_pan: (f32, f32),
 }
 
 impl GraphView {
@@ -21,11 +28,54 @@ impl GraphView {
         Self {
             workspace,
             focus_handle: cx.focus_handle(),
+            zoom: 1.0,
+            pan_x: 60.0,
+            pan_y: 60.0,
+            is_dragging: false,
+            drag_start: None,
+            drag_initial_pan: (60.0, 60.0),
         }
     }
 
+    pub fn zoom_in(&mut self, cx: &mut Context<Self>) {
+        self.zoom = (self.zoom * 1.15).min(3.5);
+        cx.notify();
+    }
+
+    pub fn zoom_out(&mut self, cx: &mut Context<Self>) {
+        self.zoom = (self.zoom / 1.15).max(0.15);
+        cx.notify();
+    }
+
+    pub fn reset_zoom(&mut self, cx: &mut Context<Self>) {
+        self.zoom = 1.0;
+        self.pan_x = 60.0;
+        self.pan_y = 60.0;
+        cx.notify();
+    }
+
+    pub fn pan_by(&mut self, dx: f32, dy: f32, cx: &mut Context<Self>) {
+        self.pan_x += dx;
+        self.pan_y += dy;
+        cx.notify();
+    }
+
+    pub fn fit_to_view(&mut self, layout: &LayoutResult, cx: &mut Context<Self>) {
+        let viewport_w = 750.0f32;
+        let viewport_h = 500.0f32;
+
+        let scale_x = (viewport_w - 80.0) / layout.total_width.max(100.0);
+        let scale_y = (viewport_h - 80.0) / layout.total_height.max(100.0);
+        let optimal_zoom = scale_x.min(scale_y).clamp(0.18, 1.2);
+
+        self.zoom = optimal_zoom;
+        self.pan_x = (viewport_w - (layout.total_width * optimal_zoom)) / 2.0;
+        self.pan_y = (viewport_h - (layout.total_height * optimal_zoom)) / 2.0;
+        cx.notify();
+    }
+
     fn render_nested_preview(&self, node: &LayoutNode, cx: &mut Context<Self>) -> impl IntoElement {
-        let max_show = 6;
+        let max_show = 4;
         let preview_items = node.children.iter().take(max_show);
 
         h_flex()
@@ -83,11 +133,39 @@ impl GraphView {
         let drill_path = node.path.clone();
         let is_dir = node.is_dir;
 
+        // Size-based subtle indicator color
+        let size_badge_color = if is_dir {
+            cx.theme().foreground
+        } else if node.size_bytes > 10 * 1024 * 1024 {
+            cx.theme().warning
+        } else if node.size_bytes > 1024 * 1024 {
+            cx.theme().primary
+        } else {
+            cx.theme().muted_foreground
+        };
+
+        // Coordinates & sizes: dynamically scaled for radial canvas, natural base size for TopDown grid
+        let (node_x, node_y, node_w, node_h) = if is_radial {
+            (
+                node.x * self.zoom,
+                node.y * self.zoom,
+                (node.width * self.zoom).max(60.0),
+                (node.height * self.zoom).max(40.0),
+            )
+        } else {
+            (
+                node.x,
+                node.y,
+                node.width,
+                node.height,
+            )
+        };
+
         v_flex()
             .id(format!("card-{}", node.id))
-            .when(is_radial, |s| s.absolute().left(px(node.x)).top(px(node.y)))
-            .w(px(node.width))
-            .min_h(px(node.height))
+            .when(is_radial, |s| s.absolute().left(px(node_x)).top(px(node_y)))
+            .w(px(node_w))
+            .min_h(px(node_h))
             .p_2()
             .gap_1()
             .rounded_md()
@@ -98,9 +176,9 @@ impl GraphView {
                 cx.theme().border
             })
             .bg(if is_selected {
-                cx.theme().primary.opacity(0.08)
+                cx.theme().primary.opacity(0.12)
             } else if is_dir {
-                cx.theme().secondary.opacity(0.35)
+                cx.theme().secondary.opacity(0.4)
             } else {
                 cx.theme().background
             })
@@ -168,14 +246,14 @@ impl GraphView {
                         } else {
                             div()
                                 .text_xs()
-                                .text_color(cx.theme().muted_foreground)
+                                .text_color(size_badge_color)
                                 .child(crate::model::fs_entry::format_bytes(node.size_bytes))
                                 .into_any_element()
                         },
                     ),
             )
-            // Nested Child Preview (Algorithm 2 Top-down mini-box rendering)
-            .when(is_dir && !node.children.is_empty(), |el| {
+            // Nested Child Preview
+            .when(is_dir && !node.children.is_empty() && (!is_radial || self.zoom > 0.45), |el| {
                 el.child(self.render_nested_preview(node, cx))
             })
             .when(is_dir && node.children.is_empty(), |el| {
@@ -220,6 +298,27 @@ impl GraphView {
                     });
                 }
             }
+            "=" | "+" => {
+                self.zoom_in(cx);
+            }
+            "-" => {
+                self.zoom_out(cx);
+            }
+            "0" => {
+                self.reset_zoom(cx);
+            }
+            "left" => {
+                self.pan_by(50.0, 0.0, cx);
+            }
+            "right" => {
+                self.pan_by(-50.0, 0.0, cx);
+            }
+            "up" => {
+                self.pan_by(0.0, 50.0, cx);
+            }
+            "down" => {
+                self.pan_by(0.0, -50.0, cx);
+            }
             _ => {}
         }
     }
@@ -245,6 +344,9 @@ impl Render for GraphView {
 
         let ws = self.workspace.clone();
         let is_radial = layout_kind == LayoutKind::RadialBalloonTree;
+        let zoom = self.zoom;
+        let pan_x = self.pan_x;
+        let pan_y = self.pan_y;
 
         // Render nodes
         let mut node_elements = Vec::new();
@@ -258,12 +360,13 @@ impl Render for GraphView {
         v_flex()
             .id("graph-view-canvas-root")
             .size_full()
+            .overflow_hidden()
             .bg(cx.theme().background)
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.handle_key_down(event, window, cx);
             }))
-            // Canvas Toolbar
+            // Canvas Top Header with Directory Title & Algorithm Switcher
             .child(
                 h_flex()
                     .w_full()
@@ -275,7 +378,7 @@ impl Render for GraphView {
                     .justify_between()
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .bg(cx.theme().secondary.opacity(0.2))
+                    .bg(cx.theme().secondary.opacity(0.25))
                     .child(
                         h_flex()
                             .items_center()
@@ -292,7 +395,7 @@ impl Render for GraphView {
                                 .text_sm(),
                             ),
                     )
-                    // Algorithm Selector buttons
+                    // Algorithm Switcher
                     .child(
                         h_flex()
                             .items_center()
@@ -315,49 +418,119 @@ impl Render for GraphView {
                             })),
                     ),
             )
-            // Compound Graph Canvas Grid / Radial Orbit Area
-            .child(
-                div()
-                    .id("graph-canvas-scroll")
-                    .flex_1()
-                    .size_full()
-                    .p_4()
-                    .overflow_y_scroll()
-                    .child({
-                        if let Some(layout) = &layout_result {
-                            if layout.root_node.children.is_empty() {
-                                v_flex()
-                                    .size_full()
-                                    .justify_center()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(Label::new("Empty Directory").font_bold())
-                                    .child(
-                                        Label::new("This folder contains no matching files or subdirectories.")
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground),
-                                    )
-                                    .into_any_element()
-                            } else if is_radial {
-                                // Radial Balloon Tree Orbit Canvas
+            // Canvas Body: NativeTopDown fits viewport naturally with vertical scroll; RadialBalloon uses interactive canvas
+            .child({
+                if let Some(layout) = &layout_result {
+                    if layout.root_node.children.is_empty() {
+                        v_flex()
+                            .size_full()
+                            .justify_center()
+                            .items_center()
+                            .gap_2()
+                            .child(Label::new("Empty Directory").font_bold())
+                            .child(
+                                Label::new("This folder contains no matching files or subdirectories.")
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground),
+                            )
+                            .into_any_element()
+                    } else if !is_radial {
+                        // Native Top Down: Clean, natural responsive grid that fits the viewport with standard vertical scrolling
+                        div()
+                            .id("native-topdown-canvas-container")
+                            .flex_1()
+                            .size_full()
+                            .overflow_y_scroll()
+                            .p_4()
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .flex_wrap()
+                                    .gap_3()
+                                    .children(node_elements),
+                            )
+                            .into_any_element()
+                    } else {
+                        // Radial Balloon Tree: Infinite-plane ZUI canvas with Mouse Dragging, Wheel Zooming & Floating Pill
+                        let hub_x = layout.root_node.x * zoom;
+                        let hub_y = layout.root_node.y * zoom;
+                        let hub_w = (layout.root_node.width * zoom).max(80.0);
+                        let hub_h = (layout.root_node.height * zoom).max(45.0);
+
+                        div()
+                            .id("radial-interactive-viewport")
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .min_h(px(0.0))
+                            .size_full()
+                            .overflow_hidden()
+                            .relative()
+                            .bg(cx.theme().background)
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                                this.is_dragging = true;
+                                let pos_x: f32 = event.position.x.into();
+                                let pos_y: f32 = event.position.y.into();
+                                this.drag_start = Some((pos_x, pos_y));
+                                this.drag_initial_pan = (this.pan_x, this.pan_y);
+                                cx.notify();
+                            }))
+                            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                                if this.is_dragging {
+                                    if let Some((start_x, start_y)) = this.drag_start {
+                                        let current_x: f32 = event.position.x.into();
+                                        let current_y: f32 = event.position.y.into();
+                                        let dx = current_x - start_x;
+                                        let dy = current_y - start_y;
+                                        this.pan_x = this.drag_initial_pan.0 + dx;
+                                        this.pan_y = this.drag_initial_pan.1 + dy;
+                                        cx.notify();
+                                    }
+                                }
+                            }))
+                            .on_mouse_up(MouseButton::Left, cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
+                                this.is_dragging = false;
+                                this.drag_start = None;
+                                cx.notify();
+                            }))
+                            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
+                                let delta_y = match event.delta {
+                                    ScrollDelta::Pixels(p) => {
+                                        let y: f32 = p.y.into();
+                                        y
+                                    }
+                                    ScrollDelta::Lines(p) => p.y * 20.0,
+                                };
+
+                                if delta_y != 0.0 {
+                                    if delta_y > 0.0 {
+                                        this.zoom = (this.zoom * 1.12).min(3.5);
+                                    } else {
+                                        this.zoom = (this.zoom / 1.12).max(0.15);
+                                    }
+                                    cx.notify();
+                                }
+                            }))
+                            .child(
                                 div()
-                                    .id("radial-balloon-canvas")
-                                    .relative()
-                                    .w(px(layout.total_width))
-                                    .h(px(layout.total_height))
-                                    // Central Core Hub Node (Fig 8 in Paper)
+                                    .id("radial-balloon-canvas-plane")
+                                    .absolute()
+                                    .left(px(pan_x))
+                                    .top(px(pan_y))
+                                    .w(px(layout.total_width * zoom))
+                                    .h(px(layout.total_height * zoom))
+                                    // Central Core Hub Node
                                     .child(
                                         v_flex()
                                             .absolute()
-                                            .left(px(layout.root_node.x))
-                                            .top(px(layout.root_node.y))
-                                            .w(px(layout.root_node.width))
-                                            .h(px(layout.root_node.height))
+                                            .left(px(hub_x))
+                                            .top(px(hub_y))
+                                            .w(px(hub_w))
+                                            .h(px(hub_h))
                                             .p_2()
                                             .rounded_full()
                                             .border_2()
                                             .border_color(cx.theme().primary)
-                                            .bg(cx.theme().primary.opacity(0.12))
+                                            .bg(cx.theme().primary.opacity(0.15))
                                             .justify_center()
                                             .items_center()
                                             .shadow_md()
@@ -368,31 +541,107 @@ impl Render for GraphView {
                                                     .text_color(cx.theme().primary),
                                             )
                                             .child(
-                                                Label::new(format!("{} children", layout.root_node.children.len()))
+                                                Label::new(format!("{} items", layout.root_node.children.len()))
                                                     .text_xs()
                                                     .text_color(cx.theme().muted_foreground),
                                             ),
                                     )
-                                    .children(node_elements)
-                                    .into_any_element()
-                            } else {
-                                // Grid Flow Canvas (NativeTopDown)
+                                    .children(node_elements),
+                            )
+                            // Floating Zoom & Fit Pill Overlay for Radial Canvas
+                            .child(
                                 h_flex()
-                                    .w_full()
-                                    .flex_wrap()
-                                    .gap_3()
-                                    .children(node_elements)
-                                    .into_any_element()
-                            }
-                        } else {
-                            v_flex()
-                                .size_full()
-                                .justify_center()
-                                .items_center()
-                                .child(Label::new("Loading layout..."))
-                                .into_any_element()
-                        }
-                    }),
-            )
+                                    .id("float-zoom-pill")
+                                    .absolute()
+                                    .bottom(px(16.0))
+                                    .right(px(16.0))
+                                    .p_1()
+                                    .gap_1()
+                                    .rounded_full()
+                                    .border_1()
+                                    .border_color(cx.theme().border)
+                                    .bg(cx.theme().background.opacity(0.92))
+                                    .shadow_lg()
+                                    .child(
+                                        Button::new("btn-zoom-out")
+                                            .label("➖")
+                                            .ghost()
+                                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                                this.zoom_out(cx);
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("btn-zoom-level")
+                                            .label(format!("{:.0}%", zoom * 100.0))
+                                            .ghost()
+                                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                                this.reset_zoom(cx);
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("btn-zoom-in")
+                                            .label("➕")
+                                            .ghost()
+                                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                                this.zoom_in(cx);
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("btn-zoom-fit")
+                                            .label("⛶ Fit View")
+                                            .ghost()
+                                            .on_click(cx.listener({
+                                                let l = layout_result.clone();
+                                                move |this, _event, _window, cx| {
+                                                    if let Some(layout) = &l {
+                                                        this.fit_to_view(layout, cx);
+                                                    }
+                                                }
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("btn-pan-left")
+                                            .label("◀")
+                                            .ghost()
+                                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                                this.pan_by(60.0, 0.0, cx);
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("btn-pan-right")
+                                            .label("▶")
+                                            .ghost()
+                                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                                this.pan_by(-60.0, 0.0, cx);
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("btn-pan-up")
+                                            .label("▲")
+                                            .ghost()
+                                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                                this.pan_by(0.0, 60.0, cx);
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("btn-pan-down")
+                                            .label("▼")
+                                            .ghost()
+                                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                                this.pan_by(0.0, -60.0, cx);
+                                            })),
+                                    ),
+                            )
+                            .into_any_element()
+                    }
+                } else {
+                    v_flex()
+                        .size_full()
+                        .justify_center()
+                        .items_center()
+                        .child(Label::new("Loading layout..."))
+                        .into_any_element()
+                }
+            })
     }
 }

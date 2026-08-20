@@ -61,6 +61,7 @@ impl Render for MainView {
 
         v_flex()
             .size_full()
+            .overflow_hidden()
             .child(
                 TitleBar::new()
                     .child(
@@ -121,41 +122,49 @@ impl Render for MainView {
                     ),
             )
             .child(
-                div().flex_1().size_full().child(if self.show_settings {
+                div().flex_1().min_h(px(0.0)).size_full().overflow_hidden().child(if self.show_settings {
                     self.settings_content.clone().into_any_element()
                 } else {
                     v_flex()
                         .size_full()
+                        .overflow_hidden()
                         // Top Breadcrumbs Bar
                         .child(self.breadcrumbs.clone().into_any_element())
                         // Main 3-Pane Work Area
                         .child(
                             h_flex()
                                 .flex_1()
+                                .min_h(px(0.0))
                                 .size_full()
+                                .overflow_hidden()
                                 // Left Files Tree Panel
                                 .when(self.show_left_sidebar, |el| {
                                     el.child(
                                         div()
                                             .w(px(260.0))
+                                            .flex_shrink_0()
                                             .h_full()
                                             .border_r_1()
                                             .border_color(cx.theme().border)
                                             .child(self.files_panel.clone().into_any_element()),
                                     )
                                 })
-                                // Center Graph Canvas
+                                // Center Graph Canvas (Strict min-width 0 & overflow hidden)
                                 .child(
                                     div()
                                         .flex_1()
+                                        .min_w(px(0.0))
+                                        .min_h(px(0.0))
                                         .h_full()
+                                        .overflow_hidden()
                                         .child(self.graph_view.clone().into_any_element()),
                                 )
-                                // Right Details / Inspector Panel
+                                // Right Details / Inspector Panel (Strict width & no shrink)
                                 .when(self.show_right_sidebar, |el| {
                                     el.child(
                                         div()
                                             .w(px(320.0))
+                                            .flex_shrink_0()
                                             .h_full()
                                             .border_l_1()
                                             .border_color(cx.theme().border)

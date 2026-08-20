@@ -91,16 +91,23 @@ impl GraphView {
         cx.notify();
     }
 
-    fn render_nested_preview(&self, node: &LayoutNode, cx: &App) -> impl IntoElement {
+    fn render_nested_preview(&self, node: &LayoutNode, is_radial: bool, cx: &App) -> impl IntoElement {
         let max_show = 4;
         let preview_items = node.children.iter().take(max_show);
         let ws = self.workspace.clone();
+        let z = if is_radial { self.zoom } else { 1.0 };
+        let pill_font = (9.0 * z).clamp(6.0, 16.0);
+        let pill_icon = (9.0 * z).clamp(6.0, 16.0);
+        let pill_px = (4.0 * z).clamp(1.5, 8.0);
+        let pill_py = (2.0 * z).clamp(0.5, 4.0);
+        let gap_sz = (3.0 * z).clamp(1.0, 6.0);
+        let pad_sz = (3.0 * z).clamp(1.0, 6.0);
 
         h_flex()
             .w_full()
             .flex_wrap()
-            .gap_1()
-            .p_1()
+            .gap(px(gap_sz))
+            .p(px(pad_sz))
             .rounded_sm()
             .bg(cx.theme().background.opacity(0.6))
             .border_1()
@@ -112,8 +119,8 @@ impl GraphView {
 
                 div()
                     .id(format!("pill-{}", child_path.display()))
-                    .px_1p5()
-                    .py_0p5()
+                    .px(px(pill_px))
+                    .py(px(pill_py))
                     .rounded_sm()
                     .cursor_pointer()
                     .bg(if child_is_dir {
@@ -135,35 +142,37 @@ impl GraphView {
                     .child(
                         h_flex()
                             .items_center()
-                            .gap_1()
+                            .gap(px(gap_sz))
                             .child(
                                 Icon::new(if child_is_dir {
                                     IconName::Folder
                                 } else {
                                     IconName::File
                                 })
-                                .xsmall()
+                                .size(px(pill_icon))
                                 .text_color(if child_is_dir {
                                     cx.theme().foreground
                                 } else {
                                     cx.theme().primary
                                 }),
                             )
-                            .child(Label::new(child.name.clone()).text_xs().text_color(
-                                if child_is_dir {
-                                    cx.theme().foreground
-                                } else {
-                                    cx.theme().primary
-                                },
-                            )),
+                            .child(
+                                Label::new(child.name.clone())
+                                    .text_size(px(pill_font))
+                                    .text_color(if child_is_dir {
+                                        cx.theme().foreground
+                                    } else {
+                                        cx.theme().primary
+                                    }),
+                            ),
                     )
             }))
             .when(node.children.len() > max_show, |el| {
                 el.child(
                     div()
-                        .px_1()
-                        .py_0p5()
-                        .text_xs()
+                        .px(px(pill_px))
+                        .py(px(pill_py))
+                        .text_size(px(pill_font))
                         .text_color(cx.theme().muted_foreground)
                         .child(format!("+{}", node.children.len() - max_show)),
                 )
@@ -195,15 +204,44 @@ impl GraphView {
         };
 
         // Coordinates & sizes: dynamically scaled for radial canvas, natural base size for TopDown grid
-        let (node_x, node_y, node_w, node_h) = if is_radial {
+        let (
+            node_x, node_y, node_w, node_h,
+            font_title, _font_body, font_badge,
+            icon_sz, icon_sm_sz,
+            pad_v, pad_h, gap_sz, corner_r
+        ) = if is_radial {
+            let z = self.zoom;
             (
-                node.x * self.zoom,
-                node.y * self.zoom,
-                (node.width * self.zoom).max(60.0),
-                (node.height * self.zoom).max(40.0),
+                node.x * z,
+                node.y * z,
+                (node.width * z).max(50.0),
+                (node.height * z).max(35.0),
+                (11.0 * z).clamp(7.0, 24.0),
+                (10.0 * z).clamp(6.0, 20.0),
+                (9.0 * z).clamp(6.0, 18.0),
+                (13.0 * z).clamp(8.0, 26.0),
+                (11.0 * z).clamp(7.0, 22.0),
+                (6.0 * z).clamp(2.0, 14.0),
+                (8.0 * z).clamp(3.0, 16.0),
+                (4.0 * z).clamp(1.0, 10.0),
+                (6.0 * z).clamp(2.0, 12.0),
             )
         } else {
-            (node.x, node.y, node.width, node.height)
+            (
+                node.x,
+                node.y,
+                node.width,
+                node.height,
+                11.0,
+                10.0,
+                9.0,
+                13.0,
+                11.0,
+                6.0,
+                8.0,
+                4.0,
+                6.0,
+            )
         };
 
         let ws_click = ws.clone();
@@ -214,9 +252,10 @@ impl GraphView {
             .when(is_radial, |s| s.absolute().left(px(node_x)).top(px(node_y)))
             .w(px(node_w))
             .min_h(px(node_h))
-            .p_2()
-            .gap_1()
-            .rounded_md()
+            .px(px(pad_h))
+            .py(px(pad_v))
+            .gap(px(gap_sz))
+            .rounded(px(corner_r))
             .border_1()
             .border_color(if is_selected {
                 cx.theme().primary
@@ -337,7 +376,7 @@ impl GraphView {
                     .child(
                         h_flex()
                             .items_center()
-                            .gap_1p5()
+                            .gap(px(gap_sz))
                             .child(
                                 Icon::new(if is_dir {
                                     if is_expanded {
@@ -348,9 +387,9 @@ impl GraphView {
                                 } else {
                                     IconName::File
                                 })
-                                .small(),
+                                .size(px(icon_sz)),
                             )
-                            .child(Label::new(node.name.clone()).font_semibold().text_xs()),
+                            .child(Label::new(node.name.clone()).font_semibold().text_size(px(font_title))),
                     )
                     .child(if is_dir {
                         let ws_drill = ws.clone();
@@ -360,15 +399,15 @@ impl GraphView {
 
                         h_flex()
                             .items_center()
-                            .gap_0p5()
+                            .gap(px((2.0 * if is_radial { self.zoom } else { 1.0 }).clamp(1.0, 6.0)))
                             // Expand / Collapse in-place Radial Balloon button
                             .child(
                                 Button::new(format!("btn-expand-{}", node.id))
-                                    .icon(if is_expanded {
+                                    .icon(Icon::new(if is_expanded {
                                         IconName::Minus
                                     } else {
                                         IconName::Plus
-                                    })
+                                    }).size(px(icon_sm_sz)))
                                     .ghost()
                                     .on_click(move |_event, _window, cx| {
                                         let p = p_exp.clone();
@@ -380,7 +419,7 @@ impl GraphView {
                             // Drill Down Navigation Button
                             .child(
                                 Button::new(format!("btn-enter-{}", node.id))
-                                    .icon(IconName::ChevronRight)
+                                    .icon(Icon::new(IconName::ChevronRight).size(px(icon_sm_sz)))
                                     .ghost()
                                     .on_click(move |_event, _window, cx| {
                                         let p = p_drill.clone();
@@ -392,7 +431,7 @@ impl GraphView {
                             .into_any_element()
                     } else {
                         div()
-                            .text_xs()
+                            .text_size(px(font_badge))
                             .text_color(size_badge_color)
                             .child(crate::model::fs_entry::format_bytes(node.size_bytes))
                             .into_any_element()
@@ -401,14 +440,14 @@ impl GraphView {
             // Nested Child Preview (when collapsed)
             .when(
                 is_dir && !node.children.is_empty() && !is_expanded && (!is_radial || self.zoom > 0.45),
-                |el| el.child(self.render_nested_preview(node, cx)),
+                |el| el.child(self.render_nested_preview(node, is_radial, cx)),
             )
             .when(is_dir && is_expanded, |el| {
                 el.child(
                     div()
                         .w_full()
                         .py_0p5()
-                        .text_xs()
+                        .text_size(px(font_badge))
                         .text_color(cx.theme().primary)
                         .child(format!("Expanded ({} items)", node.children.len())),
                 )
@@ -418,7 +457,7 @@ impl GraphView {
                     div()
                         .w_full()
                         .py_1()
-                        .text_xs()
+                        .text_size(px(font_badge))
                         .text_color(cx.theme().muted_foreground)
                         .child(format!("{} items", node.item_count)),
                 )
@@ -779,14 +818,23 @@ impl Render for GraphView {
                                         .size_full(),
                                     )
                                     // Central Core Hub Node
-                                    .child(
+                                    .child({
+                                        let hub_pad_h = (8.0 * zoom).clamp(3.0, 16.0);
+                                        let hub_pad_v = (6.0 * zoom).clamp(2.0, 12.0);
+                                        let hub_icon_sz = (14.0 * zoom).clamp(8.0, 28.0);
+                                        let hub_title_sz = (12.0 * zoom).clamp(7.0, 24.0);
+                                        let hub_sub_sz = (10.0 * zoom).clamp(6.0, 18.0);
+                                        let hub_gap = (3.0 * zoom).clamp(1.0, 8.0);
+
                                         v_flex()
                                             .absolute()
                                             .left(px(hub_x))
                                             .top(px(hub_y))
                                             .w(px(hub_w))
                                             .h(px(hub_h))
-                                            .p_2()
+                                            .px(px(hub_pad_h))
+                                            .py(px(hub_pad_v))
+                                            .gap(px(hub_gap))
                                             .rounded_full()
                                             .border_2()
                                             .border_color(cx.theme().primary)
@@ -797,16 +845,16 @@ impl Render for GraphView {
                                             .child(
                                                 h_flex()
                                                     .items_center()
-                                                    .gap_1()
+                                                    .gap(px(hub_gap))
                                                     .child(
                                                         Icon::new(IconName::FolderOpen)
-                                                            .small()
+                                                            .size(px(hub_icon_sz))
                                                             .text_color(cx.theme().primary),
                                                     )
                                                     .child(
                                                         Label::new("Hub")
                                                             .font_bold()
-                                                            .text_xs()
+                                                            .text_size(px(hub_title_sz))
                                                             .text_color(cx.theme().primary),
                                                     ),
                                             )
@@ -815,10 +863,10 @@ impl Render for GraphView {
                                                     "{} items",
                                                     layout.root_node.children.len()
                                                 ))
-                                                .text_xs()
+                                                .text_size(px(hub_sub_sz))
                                                 .text_color(cx.theme().muted_foreground),
-                                            ),
-                                    )
+                                            )
+                                    })
                                     .children(node_elements),
                             )
                             // Floating Zoom & Fit Pill Overlay for Radial Canvas

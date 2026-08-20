@@ -1,6 +1,6 @@
 use gpui::prelude::*;
 use gpui::{
-    App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, KeyDownEvent,
+    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, KeyDownEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, PathBuilder, Render,
     ScrollDelta, ScrollWheelEvent, Styled, Window, canvas, div, point, px,
 };
@@ -10,6 +10,7 @@ use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, Sizable, StyledExt, h_flex, label::Label, v_flex,
 };
+use std::path::PathBuf;
 
 use crate::model::layout::{LayoutKind, LayoutNode, LayoutResult};
 use crate::workspace::Workspace;
@@ -167,6 +168,7 @@ impl GraphView {
         &self,
         node: &LayoutNode,
         is_selected: bool,
+        is_expanded: bool,
         is_radial: bool,
         cx: &App,
     ) -> impl IntoElement {
@@ -212,11 +214,15 @@ impl GraphView {
             .border_1()
             .border_color(if is_selected {
                 cx.theme().primary
+            } else if is_expanded {
+                cx.theme().primary.opacity(0.8)
             } else {
                 cx.theme().border
             })
             .bg(if is_selected {
                 cx.theme().primary.opacity(0.12)
+            } else if is_expanded {
+                cx.theme().primary.opacity(0.08)
             } else if is_dir {
                 cx.theme().secondary.opacity(0.4)
             } else {
@@ -235,37 +241,59 @@ impl GraphView {
                 let ws_ctx = ws.clone();
                 let p_ctx = target_path.clone();
                 let is_dir = is_dir;
+                let is_expanded = is_expanded;
                 move |menu: PopupMenu, _window, _cx| {
                     let p_open = p_ctx.clone();
                     let p_reveal = p_ctx.clone();
                     let p_copy = p_ctx.clone();
                     let p_del = p_ctx.clone();
+                    let p_exp = p_ctx.clone();
                     let ws_open = ws_ctx.clone();
                     let ws_del = ws_ctx.clone();
+                    let ws_exp = ws_ctx.clone();
 
-                    menu.item(
-                        PopupMenuItem::new(if is_dir {
-                            "Drill Down"
-                        } else {
-                            "Open in Editor"
-                        })
-                        .icon(if is_dir {
-                            IconName::ChevronRight
-                        } else {
-                            IconName::ExternalLink
-                        })
-                        .on_click(move |_event, _window, cx| {
-                            let p = p_open.clone();
-                            if is_dir {
-                                ws_open.update(cx, |ws, cx| {
-                                    ws.drill_down(p, cx);
-                                });
-                            } else {
-                                Workspace::open_in_system_editor(&p);
-                            }
-                        }),
-                    )
-                    .item(
+                    let mut m = menu;
+                    if is_dir {
+                        m = m
+                            .item(
+                                PopupMenuItem::new(if is_expanded {
+                                    "Collapse Subtree"
+                                } else {
+                                    "Expand Subtree"
+                                })
+                                .icon(if is_expanded {
+                                    IconName::Minus
+                                } else {
+                                    IconName::Plus
+                                })
+                                .on_click(move |_event, _window, cx| {
+                                    let p = p_exp.clone();
+                                    ws_exp.update(cx, |ws, cx| {
+                                        ws.toggle_expand(p, cx);
+                                    });
+                                }),
+                            )
+                            .item(
+                                PopupMenuItem::new("Drill Down")
+                                    .icon(IconName::ChevronRight)
+                                    .on_click(move |_event, _window, cx| {
+                                        let p = p_open.clone();
+                                        ws_open.update(cx, |ws, cx| {
+                                            ws.drill_down(p, cx);
+                                        });
+                                    }),
+                            );
+                    } else {
+                        m = m.item(
+                            PopupMenuItem::new("Open in Editor")
+                                .icon(IconName::ExternalLink)
+                                .on_click(move |_event, _window, _cx| {
+                                    Workspace::open_in_system_editor(&p_open);
+                                }),
+                        );
+                    }
+
+                    m.item(
                         PopupMenuItem::new("Reveal in File Manager")
                             .icon(IconName::FolderOpen)
                             .on_click(move |_event, _window, _cx| {
@@ -306,7 +334,11 @@ impl GraphView {
                             .gap_1p5()
                             .child(
                                 Icon::new(if is_dir {
-                                    IconName::Folder
+                                    if is_expanded {
+                                        IconName::FolderOpen
+                                    } else {
+                                        IconName::Folder
+                                    }
                                 } else {
                                     IconName::File
                                 })
@@ -316,16 +348,41 @@ impl GraphView {
                     )
                     .child(if is_dir {
                         let ws_drill = ws.clone();
+                        let ws_exp = ws.clone();
                         let p_drill = drill_path.clone();
-                        Button::new(format!("btn-enter-{}", node.id))
-                            .icon(IconName::ChevronRight)
-                            .ghost()
-                            .on_click(move |_event, _window, cx| {
-                                let p = p_drill.clone();
-                                ws_drill.update(cx, |ws, cx| {
-                                    ws.drill_down(p, cx);
-                                });
-                            })
+                        let p_exp = drill_path.clone();
+
+                        h_flex()
+                            .items_center()
+                            .gap_0p5()
+                            // Expand / Collapse in-place Radial Balloon button
+                            .child(
+                                Button::new(format!("btn-expand-{}", node.id))
+                                    .icon(if is_expanded {
+                                        IconName::Minus
+                                    } else {
+                                        IconName::Plus
+                                    })
+                                    .ghost()
+                                    .on_click(move |_event, _window, cx| {
+                                        let p = p_exp.clone();
+                                        ws_exp.update(cx, |ws, cx| {
+                                            ws.toggle_expand(p, cx);
+                                        });
+                                    }),
+                            )
+                            // Drill Down Navigation Button
+                            .child(
+                                Button::new(format!("btn-enter-{}", node.id))
+                                    .icon(IconName::ChevronRight)
+                                    .ghost()
+                                    .on_click(move |_event, _window, cx| {
+                                        let p = p_drill.clone();
+                                        ws_drill.update(cx, |ws, cx| {
+                                            ws.drill_down(p, cx);
+                                        });
+                                    }),
+                            )
                             .into_any_element()
                     } else {
                         div()
@@ -335,11 +392,21 @@ impl GraphView {
                             .into_any_element()
                     }),
             )
-            // Nested Child Preview
+            // Nested Child Preview (when collapsed)
             .when(
-                is_dir && !node.children.is_empty() && (!is_radial || self.zoom > 0.45),
+                is_dir && !node.children.is_empty() && !is_expanded && (!is_radial || self.zoom > 0.45),
                 |el| el.child(self.render_nested_preview(node, cx)),
             )
+            .when(is_dir && is_expanded, |el| {
+                el.child(
+                    div()
+                        .w_full()
+                        .py_0p5()
+                        .text_xs()
+                        .text_color(cx.theme().primary)
+                        .child(format!("Expanded ({} items)", node.children.len())),
+                )
+            })
             .when(is_dir && node.children.is_empty(), |el| {
                 el.child(
                     div()
@@ -368,6 +435,16 @@ impl GraphView {
                     if path.is_dir() {
                         ws.update(cx, |ws, cx| {
                             ws.drill_down(path, cx);
+                        });
+                    }
+                }
+            }
+            "e" | " " => {
+                let selected = ws.read(cx).selected_path.clone();
+                if let Some(path) = selected {
+                    if path.is_dir() {
+                        ws.update(cx, |ws, cx| {
+                            ws.toggle_expand(path, cx);
                         });
                     }
                 }
@@ -425,11 +502,12 @@ impl Panel for GraphView {
 
 impl Render for GraphView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (current_path, selected_path, layout_kind, layout_result) = {
+        let (current_path, selected_path, expanded_paths, layout_kind, layout_result) = {
             let ws = self.workspace.read(cx);
             (
                 ws.current_path.clone(),
                 ws.selected_path.clone(),
+                ws.expanded_paths.clone(),
                 ws.layout_kind,
                 ws.layout_result.clone(),
             )
@@ -438,16 +516,31 @@ impl Render for GraphView {
         let ws = self.workspace.clone();
         let is_radial = layout_kind == LayoutKind::RadialBalloonTree;
 
-        let node_elements: Vec<_> = if let Some(layout) = &layout_result {
-            layout
-                .root_node
-                .children
-                .iter()
-                .map(|child| {
-                    let is_sel = selected_path.as_ref() == Some(&child.path);
-                    self.render_compound_node(child, is_sel, is_radial, cx)
-                })
-                .collect()
+        let node_elements: Vec<AnyElement> = if let Some(layout) = &layout_result {
+            if is_radial {
+                let mut elements = Vec::new();
+                collect_radial_node_elements(
+                    &layout.root_node,
+                    &selected_path,
+                    &expanded_paths,
+                    &mut elements,
+                    self,
+                    cx,
+                );
+                elements
+            } else {
+                layout
+                    .root_node
+                    .children
+                    .iter()
+                    .map(|child| {
+                        let is_sel = selected_path.as_ref() == Some(&child.path);
+                        let is_exp = expanded_paths.contains(&child.path);
+                        self.render_compound_node(child, is_sel, is_exp, is_radial, cx)
+                            .into_any_element()
+                    })
+                    .collect()
+            }
         } else {
             Vec::new()
         };
@@ -636,12 +729,13 @@ impl Render for GraphView {
                                     .top(px(pan_y))
                                     .w(px(layout.total_width * zoom))
                                     .h(px(layout.total_height * zoom))
-                                    // Visual Connector Edges from Central Hub to Child Nodes (clipped to node perimeters)
+                                    // Visual Connector Edges (Hub -> Children, and Parent -> Expanded Sub-Children)
                                     .child(
                                         canvas(
                                             move |_bounds, _window, _cx| (),
                                             {
-                                                let children = layout.root_node.children.clone();
+                                                let root_children = layout.root_node.children.clone();
+                                                let expanded = expanded_paths.clone();
                                                 let zoom = zoom;
                                                 move |bounds, _, window, cx| {
                                                     let hub_cx = hub_x + hub_w / 2.0;
@@ -649,31 +743,24 @@ impl Render for GraphView {
                                                     let hub_hw = hub_w / 2.0 + 1.0;
                                                     let hub_hh = hub_h / 2.0 + 1.0;
 
-                                                    let mut builder = PathBuilder::stroke(px(1.5));
-                                                    let mut has_segments = false;
+                                                    let mut segments = Vec::new();
+                                                    collect_edge_segments(
+                                                        hub_cx, hub_cy, hub_hw, hub_hh,
+                                                        &root_children,
+                                                        &expanded,
+                                                        zoom,
+                                                        &mut segments,
+                                                    );
 
-                                                    for child in &children {
-                                                        let child_w = (child.width * zoom).max(60.0);
-                                                        let child_h = (child.height * zoom).max(40.0);
-                                                        let child_cx = child.x * zoom + child_w / 2.0;
-                                                        let child_cy = child.y * zoom + child_h / 2.0;
-                                                        let child_hw = child_w / 2.0 + 1.0;
-                                                        let child_hh = child_h / 2.0 + 1.0;
-
-                                                        if let Some(((sx, sy), (ex, ey))) = clip_line_to_boxes(
-                                                            hub_cx, hub_cy, hub_hw, hub_hh,
-                                                            child_cx, child_cy, child_hw, child_hh,
-                                                        ) {
+                                                    if !segments.is_empty() {
+                                                        let mut builder = PathBuilder::stroke(px(1.5));
+                                                        for ((sx, sy), (ex, ey)) in segments {
                                                             let p_start = point(bounds.origin.x + px(sx), bounds.origin.y + px(sy));
                                                             let p_end = point(bounds.origin.x + px(ex), bounds.origin.y + px(ey));
-
                                                             builder.move_to(p_start);
                                                             builder.line_to(p_end);
-                                                            has_segments = true;
                                                         }
-                                                    }
 
-                                                    if has_segments {
                                                         if let Ok(path) = builder.build() {
                                                             let line_color = cx.theme().primary.opacity(0.4);
                                                             window.paint_path(path, line_color);
@@ -827,6 +914,67 @@ impl Render for GraphView {
     }
 }
 
+fn collect_radial_node_elements(
+    node: &LayoutNode,
+    selected_path: &Option<PathBuf>,
+    expanded_paths: &std::collections::HashSet<PathBuf>,
+    out: &mut Vec<AnyElement>,
+    this: &GraphView,
+    cx: &App,
+) {
+    for child in &node.children {
+        let is_sel = selected_path.as_ref() == Some(&child.path);
+        let is_exp = expanded_paths.contains(&child.path);
+        out.push(
+            this.render_compound_node(child, is_sel, is_exp, true, cx)
+                .into_any_element(),
+        );
+        if is_exp && !child.children.is_empty() {
+            collect_radial_node_elements(child, selected_path, expanded_paths, out, this, cx);
+        }
+    }
+}
+
+fn collect_edge_segments(
+    parent_cx: f32,
+    parent_cy: f32,
+    parent_hw: f32,
+    parent_hh: f32,
+    children: &[LayoutNode],
+    expanded_paths: &std::collections::HashSet<PathBuf>,
+    zoom: f32,
+    segments: &mut Vec<((f32, f32), (f32, f32))>,
+) {
+    for child in children {
+        let child_w = (child.width * zoom).max(60.0);
+        let child_h = (child.height * zoom).max(40.0);
+        let child_cx = child.x * zoom + child_w / 2.0;
+        let child_cy = child.y * zoom + child_h / 2.0;
+        let child_hw = child_w / 2.0 + 1.0;
+        let child_hh = child_h / 2.0 + 1.0;
+
+        if let Some(seg) = clip_line_to_boxes(
+            parent_cx, parent_cy, parent_hw, parent_hh,
+            child_cx, child_cy, child_hw, child_hh,
+        ) {
+            segments.push(seg);
+        }
+
+        if expanded_paths.contains(&child.path) && !child.children.is_empty() {
+            collect_edge_segments(
+                child_cx,
+                child_cy,
+                child_hw,
+                child_hh,
+                &child.children,
+                expanded_paths,
+                zoom,
+                segments,
+            );
+        }
+    }
+}
+
 fn clip_line_to_boxes(
     cx1: f32,
     cy1: f32,
@@ -848,12 +996,28 @@ fn clip_line_to_boxes(
     let ux = dx / dist;
     let uy = dy / dist;
 
-    let tx1 = if ux.abs() > 1e-6 { hw1 / ux.abs() } else { f32::INFINITY };
-    let ty1 = if uy.abs() > 1e-6 { hh1 / uy.abs() } else { f32::INFINITY };
+    let tx1 = if ux.abs() > 1e-6 {
+        hw1 / ux.abs()
+    } else {
+        f32::INFINITY
+    };
+    let ty1 = if uy.abs() > 1e-6 {
+        hh1 / uy.abs()
+    } else {
+        f32::INFINITY
+    };
     let t1 = tx1.min(ty1);
 
-    let tx2 = if ux.abs() > 1e-6 { hw2 / ux.abs() } else { f32::INFINITY };
-    let ty2 = if uy.abs() > 1e-6 { hh2 / uy.abs() } else { f32::INFINITY };
+    let tx2 = if ux.abs() > 1e-6 {
+        hw2 / ux.abs()
+    } else {
+        f32::INFINITY
+    };
+    let ty2 = if uy.abs() > 1e-6 {
+        hh2 / uy.abs()
+    } else {
+        f32::INFINITY
+    };
     let t2 = tx2.min(ty2);
 
     if t1 + t2 >= dist {

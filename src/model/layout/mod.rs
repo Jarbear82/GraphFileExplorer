@@ -74,6 +74,7 @@ pub struct LayoutOptions {
     pub gap: f32,
     pub max_preview_depth: usize,
     pub show_hidden: bool,
+    pub expanded_paths: std::collections::HashSet<PathBuf>,
 }
 
 impl Default for LayoutOptions {
@@ -85,6 +86,7 @@ impl Default for LayoutOptions {
             gap: 12.0,
             max_preview_depth: 2,
             show_hidden: false,
+            expanded_paths: std::collections::HashSet::new(),
         }
     }
 }

@@ -20,6 +20,7 @@ pub struct Workspace {
     pub layout_options: LayoutOptions,
     pub filter_query: String,
     pub show_hidden: bool,
+    pub expanded_paths: std::collections::HashSet<PathBuf>,
     pub recent_paths: Vec<PathBuf>,
     pub is_loading: bool,
     pub status_message: Option<String>,
@@ -46,6 +47,7 @@ impl Workspace {
             layout_options: LayoutOptions::default(),
             filter_query: String::new(),
             show_hidden: false,
+            expanded_paths: std::collections::HashSet::new(),
             recent_paths: vec![root_path.clone()],
             is_loading: false,
             status_message: Some(format!("Opened {}", root_path.display())),
@@ -66,12 +68,13 @@ impl Workspace {
         let filter = self.filter_query.to_lowercase();
 
         let mut root_entry = FsEntry::from_path(&path, false, 0, show_hidden);
-        root_entry.load_children(2, show_hidden);
+        root_entry.load_children(3, show_hidden);
 
         if !filter.is_empty() {
             root_entry.children.retain(|c| c.name.to_lowercase().contains(&filter));
         }
 
+        self.layout_options.expanded_paths = self.expanded_paths.clone();
         let engine = create_layout_engine(self.layout_kind);
         let layout = engine.compute_layout(&root_entry, 1000.0, 700.0, &self.layout_options);
 
@@ -80,6 +83,19 @@ impl Workspace {
         self.is_loading = false;
 
         cx.notify();
+    }
+
+    pub fn toggle_expand(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if self.expanded_paths.contains(&path) {
+            self.expanded_paths.remove(&path);
+        } else {
+            self.expanded_paths.insert(path);
+        }
+        self.load_current_directory(cx);
+    }
+
+    pub fn is_expanded(&self, path: &Path) -> bool {
+        self.expanded_paths.contains(path)
     }
 
     pub fn can_go_back(&self) -> bool {

@@ -6,10 +6,11 @@ use crate::model::layout::{
 };
 
 /// Size-Aware Radial Balloon Tree Layout
-/// Implements non-overlapping top-down radial orbital placement:
-/// - Computes circumscribed bounding radii for each node based on child complexity
+/// Implements non-overlapping radial orbital placement with interactive compound sub-balloons:
+/// - Computes circumscribed bounding radii for each node based on child complexity and expansion state
 /// - Solves for the exact non-overlapping orbit radius via chord-length summation
 /// - Allocates variable angular wedges proportional to node dimensions
+/// - Expands sub-balloons into secondary orbital rings around expanded folder nodes
 /// - Prevents overlaps between adjacent nodes, sub-balloons, and the central hub
 pub struct RadialBalloonTreeLayout;
 
@@ -54,7 +55,7 @@ impl RadialBalloonTreeLayout {
 
         // Lower bound for R: must be greater than half of the max pairwise chord
         let mut low = (max_pairwise_dist / 2.001).max(hub_clearance_radius);
-        
+
         // Sum of all pairwise chords divided by 2*PI as initial geometric estimate
         let chord_sum: f32 = (0..n).map(|i| radii[i] + radii[(i + 1) % n]).sum();
         let mut high = (chord_sum / (2.0 * PI)).max(low) * 2.5 + 200.0;
@@ -107,7 +108,15 @@ impl RadialBalloonTreeLayout {
 
         for child in children {
             let (w, h) = Self::predict_node_size(child, options);
-            let r = Self::bounding_radius(w, h, options.gap);
+            let mut r = Self::bounding_radius(w, h, options.gap);
+
+            // If the folder is expanded, increase its bounding radius to reserve space for the sub-balloon
+            if child.is_dir && !child.children.is_empty() && options.expanded_paths.contains(&child.path) {
+                let sub_count = child.children.len().max(1) as f32;
+                let sub_orbit_r = (options.base_node_width * 0.9).max(130.0) + sub_count * 12.0;
+                r += sub_orbit_r + (options.base_node_width / 2.0);
+            }
+
             node_sizes.push((w, h));
             radii.push(r);
         }
@@ -158,15 +167,16 @@ impl RadialBalloonTreeLayout {
             min_y = min_y.min(node_y);
             max_y = max_y.max(node_y + node_h);
 
-            // Nested child preview layout
+            // Nested child layout (if expanded or for inside preview)
+            let is_expanded = child.is_dir && !child.children.is_empty() && options.expanded_paths.contains(&child.path);
             let mut nested_children = Vec::new();
             let mut scale = 1.0f32;
 
             if child.is_dir && !child.children.is_empty() && depth < depth_limit {
                 let sub_options = LayoutOptions {
-                    base_node_width: options.base_node_width * 0.75,
-                    base_node_height: options.base_node_height * 0.75,
-                    gap: options.gap * 0.75,
+                    base_node_width: options.base_node_width * 0.85,
+                    base_node_height: options.base_node_height * 0.85,
+                    gap: options.gap * 0.85,
                     ..options.clone()
                 };
 
@@ -181,6 +191,13 @@ impl RadialBalloonTreeLayout {
                     max_scale,
                     total_nodes,
                 );
+
+                if is_expanded {
+                    min_x = min_x.min(sub_min_x);
+                    max_x = max_x.max(sub_max_x);
+                    min_y = min_y.min(sub_min_y);
+                    max_y = max_y.max(sub_max_y);
+                }
 
                 let sub_w = (sub_max_x - sub_min_x).max(1.0);
                 let sub_h = (sub_max_y - sub_min_y).max(1.0);
@@ -212,6 +229,14 @@ impl RadialBalloonTreeLayout {
         }
 
         (nodes, min_x, max_x, min_y, max_y)
+    }
+
+    fn apply_offset(node: &mut LayoutNode, offset_x: f32, offset_y: f32) {
+        node.x += offset_x;
+        node.y += offset_y;
+        for child in &mut node.children {
+            Self::apply_offset(child, offset_x, offset_y);
+        }
     }
 }
 
@@ -253,14 +278,10 @@ impl CompoundLayoutAlgorithm for RadialBalloonTreeLayout {
         let offset_x = padding - min_x.min(approx_center_x - options.base_node_width / 2.0);
         let offset_y = padding - min_y.min(approx_center_y - options.base_node_height / 2.0);
 
-        let normalized_children: Vec<LayoutNode> = children
-            .into_iter()
-            .map(|mut node| {
-                node.x += offset_x;
-                node.y += offset_y;
-                node
-            })
-            .collect();
+        let mut normalized_children = children;
+        for node in &mut normalized_children {
+            Self::apply_offset(node, offset_x, offset_y);
+        }
 
         let total_w = (max_x - min_x + (padding * 2.0)).max(available_width);
         let total_h = (max_y - min_y + (padding * 2.0)).max(available_height);

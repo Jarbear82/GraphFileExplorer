@@ -6,20 +6,30 @@ use gpui::{
 };
 use gpui_component::dock::{DockLayout, DockPlacement};
 use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::{Root, Theme, TitleBar, h_flex, v_flex};
+use gpui_component::{Root, StyledExt, Theme, TitleBar, h_flex, v_flex};
 
 use crate::settings_content::SettingsContent;
-use crate::ui::{Breadcrumbs, FilesPanel, GraphView, InspectorPanel, StatusBar};
+use crate::ui::{Breadcrumbs, FilesPanel, GraphView, InspectorPanel, StatusBar, TableView};
 use crate::workspace::Workspace;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ViewMode {
+    #[default]
+    Graph,
+    Table,
+    Split,
+}
 
 pub struct MainView {
     workspace: Entity<Workspace>,
     breadcrumbs: Entity<Breadcrumbs>,
     _files_panel: Entity<FilesPanel>,
-    _graph_view: Entity<GraphView>,
+    graph_view: Entity<GraphView>,
+    table_view: Entity<TableView>,
     _inspector_panel: Entity<InspectorPanel>,
     status_bar: Entity<StatusBar>,
     settings_content: Entity<SettingsContent>,
+    view_mode: ViewMode,
     show_settings: bool,
     _appearance_subscription: Subscription,
 }
@@ -29,14 +39,12 @@ impl MainView {
         let breadcrumbs = cx.new(|cx| Breadcrumbs::new(workspace.clone(), window, cx));
         let files_panel = cx.new(|cx| FilesPanel::new(workspace.clone(), window, cx));
         let graph_view = cx.new(|cx| GraphView::new(workspace.clone(), window, cx));
+        let table_view = cx.new(|cx| TableView::new(workspace.clone(), window, cx));
         let inspector_panel = cx.new(|cx| InspectorPanel::new(workspace.clone(), window, cx));
         let status_bar = cx.new(|cx| StatusBar::new(workspace.clone(), window, cx));
         let settings_content = cx.new(|cx| SettingsContent::new(window, cx));
 
-        // Fully adopt gpui_component DockArea:
-        // Center: GraphView
-        // Left Dock: FilesPanel
-        // Right Dock: InspectorPanel
+        // Configure DockArea with GraphView in center, FilesPanel in left dock, InspectorPanel in right dock
         let dock_area = workspace.read(cx).dock_area.clone();
         let center_layout = DockLayout::tabs().panel(graph_view.clone());
         let left_layout = DockLayout::tabs().panel(files_panel.clone());
@@ -59,13 +67,37 @@ impl MainView {
             workspace,
             breadcrumbs,
             _files_panel: files_panel,
-            _graph_view: graph_view,
+            graph_view,
+            table_view,
             _inspector_panel: inspector_panel,
             status_bar,
             settings_content,
+            view_mode: ViewMode::Graph,
             show_settings: false,
             _appearance_subscription: subscription,
         }
+    }
+
+    pub fn set_view_mode(&mut self, mode: ViewMode, window: &mut Window, cx: &mut Context<Self>) {
+        if self.view_mode == mode {
+            return;
+        }
+        self.view_mode = mode;
+
+        let dock_area = self.workspace.read(cx).dock_area.clone();
+        let center_layout = match mode {
+            ViewMode::Graph => DockLayout::tabs().panel(self.graph_view.clone()),
+            ViewMode::Table => DockLayout::tabs().panel(self.table_view.clone()),
+            ViewMode::Split => DockLayout::h_split()
+                .child(DockLayout::tabs().panel(self.graph_view.clone()), None)
+                .child(DockLayout::tabs().panel(self.table_view.clone()), None),
+        };
+
+        dock_area.update(cx, |dock, cx| {
+            dock.set_center(center_layout, window, cx);
+        });
+
+        cx.notify();
     }
 }
 
@@ -73,6 +105,7 @@ impl Render for MainView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let ws = self.workspace.clone();
         let dock_area = self.workspace.read(cx).dock_area.clone();
+        let view_mode = self.view_mode;
 
         v_flex()
             .size_full()
@@ -101,16 +134,49 @@ impl Render for MainView {
                             ),
                     )
                     .child(
-                        Button::new("settings-button")
-                            .label(if self.show_settings {
-                                "Back to Graph"
-                            } else {
-                                "⚙ Settings"
-                            })
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.show_settings = !this.show_settings;
-                                cx.notify();
-                            })),
+                        h_flex()
+                            .items_center()
+                            .gap_1()
+                            // View Mode Switcher
+                            .child(
+                                Button::new("btn-view-graph")
+                                    .label("🌌 Graph")
+                                    .ghost()
+                                    .when(view_mode == ViewMode::Graph, |b| b.font_bold().border_1())
+                                    .on_click(cx.listener(|this, _event, window, cx| {
+                                        this.set_view_mode(ViewMode::Graph, window, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("btn-view-table")
+                                    .label("📋 Table")
+                                    .ghost()
+                                    .when(view_mode == ViewMode::Table, |b| b.font_bold().border_1())
+                                    .on_click(cx.listener(|this, _event, window, cx| {
+                                        this.set_view_mode(ViewMode::Table, window, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("btn-view-split")
+                                    .label("🔲 Split")
+                                    .ghost()
+                                    .when(view_mode == ViewMode::Split, |b| b.font_bold().border_1())
+                                    .on_click(cx.listener(|this, _event, window, cx| {
+                                        this.set_view_mode(ViewMode::Split, window, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("settings-button")
+                                    .label(if self.show_settings {
+                                        "Back to Explorer"
+                                    } else {
+                                        "⚙ Settings"
+                                    })
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.show_settings = !this.show_settings;
+                                        cx.notify();
+                                    })),
+                            ),
                     ),
             )
             .child(

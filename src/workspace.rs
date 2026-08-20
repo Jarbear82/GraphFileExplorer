@@ -68,7 +68,7 @@ impl Workspace {
         let filter = self.filter_query.to_lowercase();
 
         let mut root_entry = FsEntry::from_path(&path, false, 0, show_hidden);
-        root_entry.load_children(3, show_hidden);
+        root_entry.load_children_with_expanded(&self.expanded_paths, 1, show_hidden);
 
         if !filter.is_empty() {
             root_entry.children.retain(|c| c.name.to_lowercase().contains(&filter));

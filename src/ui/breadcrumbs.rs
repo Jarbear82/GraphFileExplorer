@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use gpui::prelude::*;
-use gpui::{Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Window, div, px};
+use gpui::{Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Subscription, Window, div, px};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputState};
 use gpui_component::{ActiveTheme, Disableable, Icon, IconName, Sizable, StyledExt, h_flex};
@@ -11,6 +11,7 @@ pub struct Breadcrumbs {
     workspace: Entity<Workspace>,
     focus_handle: FocusHandle,
     search_input: Entity<InputState>,
+    _workspace_subscription: Subscription,
 }
 
 impl Breadcrumbs {
@@ -21,10 +22,15 @@ impl Breadcrumbs {
     ) -> Self {
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter items..."));
 
+        let subscription = cx.observe(&workspace, |_this, _ws, cx| {
+            cx.notify();
+        });
+
         Self {
             workspace,
             focus_handle: cx.focus_handle(),
             search_input,
+            _workspace_subscription: subscription,
         }
     }
 }

@@ -1,5 +1,5 @@
 use gpui::{
-    Context, Entity, IntoElement, ParentElement, Render, Styled, Window,
+    Context, Entity, IntoElement, ParentElement, Render, Styled, Subscription, Window,
     px,
 };
 use gpui_component::{
@@ -10,11 +10,19 @@ use crate::workspace::Workspace;
 
 pub struct StatusBar {
     workspace: Entity<Workspace>,
+    _workspace_subscription: Subscription,
 }
 
 impl StatusBar {
-    pub fn new(workspace: Entity<Workspace>, _window: &mut Window, _cx: &mut Context<Self>) -> Self {
-        Self { workspace }
+    pub fn new(workspace: Entity<Workspace>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let subscription = cx.observe(&workspace, |_this, _ws, cx| {
+            cx.notify();
+        });
+
+        Self {
+            workspace,
+            _workspace_subscription: subscription,
+        }
     }
 }
 

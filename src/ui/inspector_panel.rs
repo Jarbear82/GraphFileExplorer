@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{
     Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement, Render,
-    Styled, Window, div, px,
+    Styled, Subscription, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::dock::{BasePanel, Panel, PanelEvent};
@@ -17,13 +17,19 @@ use crate::workspace::Workspace;
 pub struct InspectorPanel {
     workspace: Entity<Workspace>,
     focus_handle: FocusHandle,
+    _workspace_subscription: Subscription,
 }
 
 impl InspectorPanel {
     pub fn new(workspace: Entity<Workspace>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let subscription = cx.observe(&workspace, |_this, _ws, cx| {
+            cx.notify();
+        });
+
         Self {
             workspace,
             focus_handle: cx.focus_handle(),
+            _workspace_subscription: subscription,
         }
     }
 

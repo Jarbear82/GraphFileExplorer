@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use gpui::prelude::*;
 use gpui::{
     Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
-    Render, Styled, Window, div, px,
+    Render, Styled, Subscription, Window, div, px,
 };
 use gpui_component::dock::{BasePanel, Panel, PanelEvent};
 use gpui_component::button::{Button, ButtonVariants};
@@ -55,6 +55,7 @@ pub struct FilesPanel {
     focus_handle: FocusHandle,
     tree_state: Entity<TreeState>,
     last_root: PathBuf,
+    _workspace_subscription: Subscription,
 }
 
 impl FilesPanel {
@@ -74,11 +75,17 @@ impl FilesPanel {
 
         let tree_state = cx.new(|cx| TreeState::new(cx).items(vec![root_item]));
 
+        let subscription = cx.observe(&workspace, |this, _ws, cx| {
+            this.reload_tree(cx);
+            cx.notify();
+        });
+
         Self {
             workspace,
             focus_handle: cx.focus_handle(),
             tree_state,
             last_root: root_path,
+            _workspace_subscription: subscription,
         }
     }
 

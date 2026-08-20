@@ -148,6 +148,16 @@ impl FsEntry {
     }
 
     pub fn load_children(&mut self, depth_limit: usize, show_hidden: bool) {
+        let empty_set = std::collections::HashSet::new();
+        self.load_children_with_expanded(&empty_set, depth_limit, show_hidden);
+    }
+
+    pub fn load_children_with_expanded(
+        &mut self,
+        expanded_paths: &std::collections::HashSet<PathBuf>,
+        base_preview_depth: usize,
+        show_hidden: bool,
+    ) {
         if !self.is_dir {
             return;
         }
@@ -165,9 +175,20 @@ impl FsEntry {
                     continue;
                 }
 
-                let should_load_grandchild = depth_limit > 1;
-                let next_depth = if depth_limit > 0 { depth_limit - 1 } else { 0 };
-                let child = FsEntry::from_path(&child_path, should_load_grandchild, next_depth, show_hidden);
+                let is_child_expanded = expanded_paths.contains(&child_path);
+                let next_preview_depth = if is_child_expanded {
+                    base_preview_depth.max(1)
+                } else if base_preview_depth > 0 {
+                    base_preview_depth - 1
+                } else {
+                    0
+                };
+
+                let should_load = is_child_expanded || base_preview_depth > 0;
+                let mut child = FsEntry::from_path(&child_path, false, 0, show_hidden);
+                if child.is_dir && should_load {
+                    child.load_children_with_expanded(expanded_paths, next_preview_depth, show_hidden);
+                }
                 children.push(child);
             }
         }

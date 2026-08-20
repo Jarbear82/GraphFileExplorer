@@ -84,7 +84,7 @@ impl Default for LayoutOptions {
             base_node_height: 90.0,
             padding: 16.0,
             gap: 12.0,
-            max_preview_depth: 2,
+            max_preview_depth: 10,
             show_hidden: false,
             expanded_paths: std::collections::HashSet::new(),
         }

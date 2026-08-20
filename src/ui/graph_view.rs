@@ -2,7 +2,7 @@ use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, KeyDownEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, PathBuilder, Render,
-    ScrollDelta, ScrollWheelEvent, Styled, Window, canvas, div, point, px,
+    ScrollDelta, ScrollWheelEvent, Styled, Subscription, Window, canvas, div, point, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::dock::{BasePanel, Panel, PanelEvent};
@@ -24,10 +24,15 @@ pub struct GraphView {
     is_dragging: bool,
     drag_start: Option<(f32, f32)>,
     drag_initial_pan: (f32, f32),
+    _workspace_subscription: Subscription,
 }
 
 impl GraphView {
     pub fn new(workspace: Entity<Workspace>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let subscription = cx.observe(&workspace, |_this, _ws, cx| {
+            cx.notify();
+        });
+
         Self {
             workspace,
             focus_handle: cx.focus_handle(),
@@ -37,6 +42,7 @@ impl GraphView {
             is_dragging: false,
             drag_start: None,
             drag_initial_pan: (0.0, 0.0),
+            _workspace_subscription: subscription,
         }
     }
 

@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{
-    Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Render, Styled, Window,
-    div, px,
+    Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Render, Styled,
+    Subscription, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::dock::{BasePanel, Panel, PanelEvent};
@@ -33,15 +33,21 @@ pub struct TableView {
     focus_handle: FocusHandle,
     sort_field: SortField,
     sort_order: SortOrder,
+    _workspace_subscription: Subscription,
 }
 
 impl TableView {
     pub fn new(workspace: Entity<Workspace>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let subscription = cx.observe(&workspace, |_this, _ws, cx| {
+            cx.notify();
+        });
+
         Self {
             workspace,
             focus_handle: cx.focus_handle(),
             sort_field: SortField::Name,
             sort_order: SortOrder::Asc,
+            _workspace_subscription: subscription,
         }
     }
 

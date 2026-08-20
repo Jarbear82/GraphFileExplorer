@@ -6,7 +6,7 @@ use gpui::{
 };
 use gpui_component::dock::{DockLayout, DockPlacement};
 use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::{Root, StyledExt, Theme, TitleBar, h_flex, v_flex};
+use gpui_component::{ActiveTheme, Icon, IconName, Root, Sizable, StyledExt, Theme, TitleBar, h_flex, label::Label, v_flex};
 
 use crate::settings_content::SettingsContent;
 use crate::ui::{Breadcrumbs, FilesPanel, GraphView, InspectorPanel, StatusBar, TableView};
@@ -116,10 +116,12 @@ impl Render for MainView {
                         h_flex()
                             .items_center()
                             .gap_2()
-                            .child("🌌 Graph File Explorer")
+                            .child(Icon::new(IconName::LayoutDashboard).small().text_color(cx.theme().primary))
+                            .child(Label::new("Graph File Explorer").font_bold())
                             .child(
                                 Button::new("btn-open-workspace")
-                                    .label("📂 Home Folder")
+                                    .icon(IconName::HardDrive)
+                                    .label("Home")
                                     .ghost()
                                     .on_click(cx.listener({
                                         let ws = ws.clone();
@@ -140,7 +142,8 @@ impl Render for MainView {
                             // View Mode Switcher
                             .child(
                                 Button::new("btn-view-graph")
-                                    .label("🌌 Graph")
+                                    .icon(IconName::LayoutDashboard)
+                                    .label("Graph")
                                     .ghost()
                                     .when(view_mode == ViewMode::Graph, |b| b.font_bold().border_1())
                                     .on_click(cx.listener(|this, _event, window, cx| {
@@ -149,7 +152,8 @@ impl Render for MainView {
                             )
                             .child(
                                 Button::new("btn-view-table")
-                                    .label("📋 Table")
+                                    .icon(IconName::Frame)
+                                    .label("Table")
                                     .ghost()
                                     .when(view_mode == ViewMode::Table, |b| b.font_bold().border_1())
                                     .on_click(cx.listener(|this, _event, window, cx| {
@@ -158,7 +162,8 @@ impl Render for MainView {
                             )
                             .child(
                                 Button::new("btn-view-split")
-                                    .label("🔲 Split")
+                                    .icon(IconName::PanelLeft)
+                                    .label("Split")
                                     .ghost()
                                     .when(view_mode == ViewMode::Split, |b| b.font_bold().border_1())
                                     .on_click(cx.listener(|this, _event, window, cx| {
@@ -167,10 +172,11 @@ impl Render for MainView {
                             )
                             .child(
                                 Button::new("settings-button")
+                                    .icon(IconName::Settings)
                                     .label(if self.show_settings {
-                                        "Back to Explorer"
+                                        "Back"
                                     } else {
-                                        "⚙ Settings"
+                                        "Settings"
                                     })
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.show_settings = !this.show_settings;

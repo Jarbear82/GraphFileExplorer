@@ -10,7 +10,7 @@ use gpui_component::list::ListItem;
 use gpui_component::menu::{PopupMenu, PopupMenuItem};
 use gpui_component::tree::{TreeEntry, TreeItem, TreeState, tree};
 use gpui_component::{
-    ActiveTheme, IconName, StyledExt, h_flex, label::Label, v_flex,
+    ActiveTheme, Icon, IconName, Sizable, StyledExt, h_flex, label::Label, v_flex,
 };
 
 use crate::workspace::Workspace;
@@ -155,21 +155,28 @@ impl Render for FilesPanel {
                     .border_color(cx.theme().border)
                     .bg(cx.theme().secondary.opacity(0.3))
                     .child(
-                        Label::new(
-                            root_path
-                                .file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_else(|| "Workspace".to_string()),
-                        )
-                        .font_bold()
-                        .text_xs(),
+                        h_flex()
+                            .items_center()
+                            .gap_1p5()
+                            .child(Icon::new(IconName::Folder).small())
+                            .child(
+                                Label::new(
+                                    root_path
+                                        .file_name()
+                                        .map(|n| n.to_string_lossy().to_string())
+                                        .unwrap_or_else(|| "Workspace".to_string()),
+                                )
+                                .font_bold()
+                                .text_xs(),
+                            ),
                     )
                     .child(
                         h_flex()
                             .gap_1()
                             .child(
                                 Button::new("btn-new-file")
-                                    .label("+ File")
+                                    .icon(IconName::Plus)
+                                    .label("File")
                                     .ghost()
                                     .on_click(cx.listener({
                                         let ws = ws.clone();
@@ -182,7 +189,8 @@ impl Render for FilesPanel {
                             )
                             .child(
                                 Button::new("btn-new-folder")
-                                    .label("+ Folder")
+                                    .icon(IconName::Folder)
+                                    .label("Folder")
                                     .ghost()
                                     .on_click(cx.listener({
                                         let ws = ws.clone();
@@ -213,7 +221,7 @@ impl Render for FilesPanel {
                                 let is_dir = entry.is_folder();
                                 let is_expanded = entry.is_expanded();
 
-                                let icon = if !is_dir {
+                                let icon_name = if !is_dir {
                                     IconName::File
                                 } else if is_expanded {
                                     IconName::FolderOpen
@@ -249,7 +257,11 @@ impl Render for FilesPanel {
                                                 h_flex()
                                                     .items_center()
                                                     .gap_1p5()
-                                                    .child(icon)
+                                                    .child(Icon::new(icon_name).small().text_color(if is_selected {
+                                                        cx.theme().primary
+                                                    } else {
+                                                        cx.theme().foreground
+                                                    }))
                                                     .child(
                                                         Label::new(name)
                                                             .text_xs()
@@ -263,7 +275,7 @@ impl Render for FilesPanel {
                                             .when(is_dir, |el| {
                                                 el.child(
                                                     Button::new(format!("btn-drill-{}", path_str))
-                                                        .label("➔")
+                                                        .icon(IconName::ChevronRight)
                                                         .ghost()
                                                         .on_click(move |_event, _window, cx| {
                                                             let p = p_drill.clone();
@@ -291,7 +303,8 @@ impl Render for FilesPanel {
 
                                 menu
                                     .item(
-                                        PopupMenuItem::new(if is_dir { "➔ Drill Down" } else { "⚡ Open in Editor" })
+                                        PopupMenuItem::new(if is_dir { "Drill Down" } else { "Open in Editor" })
+                                            .icon(if is_dir { IconName::ChevronRight } else { IconName::ExternalLink })
                                             .on_click(move |_event, _window, cx| {
                                                 let p = p_open.clone();
                                                 if is_dir {
@@ -302,20 +315,23 @@ impl Render for FilesPanel {
                                             })
                                     )
                                     .item(
-                                        PopupMenuItem::new("📁 Reveal in File Manager")
+                                        PopupMenuItem::new("Reveal in File Manager")
+                                            .icon(IconName::FolderOpen)
                                             .on_click(move |_event, _window, _cx| {
                                                 Workspace::reveal_in_file_manager(&p_reveal);
                                             })
                                     )
                                     .item(
-                                        PopupMenuItem::new("📋 Copy Path")
+                                        PopupMenuItem::new("Copy Full Path")
+                                            .icon(IconName::Copy)
                                             .on_click(move |_event, _window, cx| {
                                                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(p_copy.to_string_lossy().to_string()));
                                             })
                                     )
                                     .separator()
                                     .item(
-                                        PopupMenuItem::new("🗑 Delete")
+                                        PopupMenuItem::new("Delete")
+                                            .icon(IconName::Delete)
                                             .on_click(move |_event, _window, cx| {
                                                 let p = p_del.clone();
                                                 ws_del.update(cx, |ws, cx| {

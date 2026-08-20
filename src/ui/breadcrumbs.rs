@@ -3,7 +3,7 @@ use gpui::prelude::*;
 use gpui::{Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Window, div, px};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputState};
-use gpui_component::{ActiveTheme, Disableable, StyledExt, h_flex, label::Label};
+use gpui_component::{ActiveTheme, Disableable, Icon, IconName, Sizable, StyledExt, h_flex};
 
 use crate::workspace::Workspace;
 
@@ -19,7 +19,7 @@ impl Breadcrumbs {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("🔍 Filter items..."));
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter items..."));
 
         Self {
             workspace,
@@ -95,7 +95,7 @@ impl Render for Breadcrumbs {
                     // History Back
                     .child(
                         Button::new("btn-nav-back")
-                            .label("◀")
+                            .icon(IconName::ArrowLeft)
                             .ghost()
                             .disabled(!can_go_back)
                             .on_click(cx.listener({
@@ -110,7 +110,7 @@ impl Render for Breadcrumbs {
                     // History Forward
                     .child(
                         Button::new("btn-nav-forward")
-                            .label("▶")
+                            .icon(IconName::ArrowRight)
                             .ghost()
                             .disabled(!can_go_forward)
                             .on_click(cx.listener({
@@ -125,7 +125,8 @@ impl Render for Breadcrumbs {
                     // Up to parent
                     .child(
                         Button::new("btn-nav-up")
-                            .label("▲ Up")
+                            .icon(IconName::ArrowUp)
+                            .label("Up")
                             .ghost()
                             .disabled(!can_go_up)
                             .on_click(cx.listener({
@@ -152,10 +153,11 @@ impl Render for Breadcrumbs {
                                     .items_center()
                                     .gap_1()
                                     .when(idx > 0, |el| {
-                                        el.child(Label::new("/").text_xs().text_color(cx.theme().muted_foreground))
+                                        el.child(Icon::new(IconName::ChevronRight).xsmall().text_color(cx.theme().muted_foreground))
                                     })
                                     .child(
                                         Button::new(format!("crumb-{}", idx))
+                                            .icon(if path.is_dir() { IconName::Folder } else { IconName::File })
                                             .label(name)
                                             .ghost()
                                             .when(is_last, |b| b.font_bold().border_b_2().border_color(cx.theme().primary))
@@ -183,6 +185,7 @@ impl Render for Breadcrumbs {
                     )
                     .child(
                         Button::new("btn-toggle-filter")
+                            .icon(IconName::Search)
                             .label("Filter")
                             .ghost()
                             .on_click(cx.listener({
@@ -198,7 +201,8 @@ impl Render for Breadcrumbs {
                     )
                     .child(
                         Button::new("btn-toggle-hidden")
-                            .label(if show_hidden { "👁 Hidden: On" } else { "👁 Hidden: Off" })
+                            .icon(if show_hidden { IconName::Eye } else { IconName::EyeOff })
+                            .label("Hidden")
                             .ghost()
                             .on_click(cx.listener({
                                 let ws = ws.clone();
@@ -211,7 +215,7 @@ impl Render for Breadcrumbs {
                     )
                     .child(
                         Button::new("btn-refresh")
-                            .label("🔄")
+                            .icon(IconName::Redo)
                             .ghost()
                             .on_click(cx.listener({
                                 let ws = ws.clone();

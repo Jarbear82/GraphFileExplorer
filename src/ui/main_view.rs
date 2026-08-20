@@ -4,8 +4,9 @@ use gpui::{
     Context, Entity, IntoElement, ParentElement, Render, Styled, Subscription, Window,
     div, px,
 };
+use gpui_component::dock::{DockLayout, DockPlacement};
 use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::{ActiveTheme, Root, Theme, TitleBar, h_flex, v_flex};
+use gpui_component::{Root, Theme, TitleBar, h_flex, v_flex};
 
 use crate::settings_content::SettingsContent;
 use crate::ui::{Breadcrumbs, FilesPanel, GraphView, InspectorPanel, StatusBar};
@@ -14,14 +15,12 @@ use crate::workspace::Workspace;
 pub struct MainView {
     workspace: Entity<Workspace>,
     breadcrumbs: Entity<Breadcrumbs>,
-    files_panel: Entity<FilesPanel>,
-    graph_view: Entity<GraphView>,
-    inspector_panel: Entity<InspectorPanel>,
+    _files_panel: Entity<FilesPanel>,
+    _graph_view: Entity<GraphView>,
+    _inspector_panel: Entity<InspectorPanel>,
     status_bar: Entity<StatusBar>,
     settings_content: Entity<SettingsContent>,
     show_settings: bool,
-    show_left_sidebar: bool,
-    show_right_sidebar: bool,
     _appearance_subscription: Subscription,
 }
 
@@ -34,6 +33,23 @@ impl MainView {
         let status_bar = cx.new(|cx| StatusBar::new(workspace.clone(), window, cx));
         let settings_content = cx.new(|cx| SettingsContent::new(window, cx));
 
+        // Fully adopt gpui_component DockArea:
+        // Center: GraphView
+        // Left Dock: FilesPanel
+        // Right Dock: InspectorPanel
+        let dock_area = workspace.read(cx).dock_area.clone();
+        let center_layout = DockLayout::tabs().panel(graph_view.clone());
+        let left_layout = DockLayout::tabs().panel(files_panel.clone());
+        let right_layout = DockLayout::tabs().panel(inspector_panel.clone());
+
+        dock_area.update(cx, |dock, cx| {
+            dock.set_center(center_layout, window, cx);
+            dock.set_dock(DockPlacement::Left, left_layout, window, cx);
+            dock.set_dock(DockPlacement::Right, right_layout, window, cx);
+            dock.set_dock_size(DockPlacement::Left, px(260.0), window, cx);
+            dock.set_dock_size(DockPlacement::Right, px(320.0), window, cx);
+        });
+
         let subscription = window.observe_window_appearance(|window, cx| {
             Theme::sync_system_appearance(Some(window), cx);
             cx.refresh_windows();
@@ -42,14 +58,12 @@ impl MainView {
         Self {
             workspace,
             breadcrumbs,
-            files_panel,
-            graph_view,
-            inspector_panel,
+            _files_panel: files_panel,
+            _graph_view: graph_view,
+            _inspector_panel: inspector_panel,
             status_bar,
             settings_content,
             show_settings: false,
-            show_left_sidebar: true,
-            show_right_sidebar: true,
             _appearance_subscription: subscription,
         }
     }
@@ -58,6 +72,7 @@ impl MainView {
 impl Render for MainView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let ws = self.workspace.clone();
+        let dock_area = self.workspace.read(cx).dock_area.clone();
 
         v_flex()
             .size_full()
@@ -86,39 +101,16 @@ impl Render for MainView {
                             ),
                     )
                     .child(
-                        h_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                Button::new("toggle-left-panel")
-                                    .label(if self.show_left_sidebar { "◀ Tree" } else { "▶ Tree" })
-                                    .ghost()
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.show_left_sidebar = !this.show_left_sidebar;
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                Button::new("toggle-right-panel")
-                                    .label(if self.show_right_sidebar { "Details ▶" } else { "Details ◀" })
-                                    .ghost()
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.show_right_sidebar = !this.show_right_sidebar;
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                Button::new("settings-button")
-                                    .label(if self.show_settings {
-                                        "Back to Graph"
-                                    } else {
-                                        "⚙ Settings"
-                                    })
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.show_settings = !this.show_settings;
-                                        cx.notify();
-                                    })),
-                            ),
+                        Button::new("settings-button")
+                            .label(if self.show_settings {
+                                "Back to Graph"
+                            } else {
+                                "⚙ Settings"
+                            })
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.show_settings = !this.show_settings;
+                                cx.notify();
+                            })),
                     ),
             )
             .child(
@@ -130,47 +122,15 @@ impl Render for MainView {
                         .overflow_hidden()
                         // Top Breadcrumbs Bar
                         .child(self.breadcrumbs.clone().into_any_element())
-                        // Main 3-Pane Work Area
+                        // Native gpui_component DockArea (resizable splits, collapsible sidebars, draggable tabs)
                         .child(
-                            h_flex()
+                            div()
                                 .flex_1()
+                                .min_w(px(0.0))
                                 .min_h(px(0.0))
                                 .size_full()
                                 .overflow_hidden()
-                                // Left Files Tree Panel
-                                .when(self.show_left_sidebar, |el| {
-                                    el.child(
-                                        div()
-                                            .w(px(260.0))
-                                            .flex_shrink_0()
-                                            .h_full()
-                                            .border_r_1()
-                                            .border_color(cx.theme().border)
-                                            .child(self.files_panel.clone().into_any_element()),
-                                    )
-                                })
-                                // Center Graph Canvas (Strict min-width 0 & overflow hidden)
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w(px(0.0))
-                                        .min_h(px(0.0))
-                                        .h_full()
-                                        .overflow_hidden()
-                                        .child(self.graph_view.clone().into_any_element()),
-                                )
-                                // Right Details / Inspector Panel (Strict width & no shrink)
-                                .when(self.show_right_sidebar, |el| {
-                                    el.child(
-                                        div()
-                                            .w(px(320.0))
-                                            .flex_shrink_0()
-                                            .h_full()
-                                            .border_l_1()
-                                            .border_color(cx.theme().border)
-                                            .child(self.inspector_panel.clone().into_any_element()),
-                                    )
-                                }),
+                                .child(dock_area.into_any_element()),
                         )
                         // Bottom Status Bar
                         .child(self.status_bar.clone().into_any_element())

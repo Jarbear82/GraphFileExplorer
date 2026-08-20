@@ -1,13 +1,8 @@
-use std::path::{Path, PathBuf};
 use gpui::prelude::*;
-use gpui::{
-    Context, Entity, IntoElement, ParentElement, Render, Styled, Window,
-    px,
-};
+use gpui::{Context, Entity, IntoElement, ParentElement, Render, Styled, Window, px};
 use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::{
-    ActiveTheme, Disableable, StyledExt, h_flex, label::Label,
-};
+use gpui_component::{ActiveTheme, Disableable, StyledExt, h_flex, label::Label};
+use std::path::{Path, PathBuf};
 
 use crate::workspace::Workspace;
 
@@ -16,7 +11,11 @@ pub struct Breadcrumbs {
 }
 
 impl Breadcrumbs {
-    pub fn new(workspace: Entity<Workspace>, _window: &mut Window, _cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        workspace: Entity<Workspace>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Self {
         Self { workspace }
     }
 }
@@ -43,7 +42,7 @@ impl Render for Breadcrumbs {
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| curr.to_string_lossy().to_string());
             segments.push((name, curr.to_path_buf()));
-            
+
             if curr == root_path {
                 break;
             }
@@ -94,7 +93,9 @@ impl Render for Breadcrumbs {
                         h_flex()
                             .items_center()
                             .gap_1()
-                            .when(idx > 0, |el| el.child(Label::new("/").text_color(cx.theme().muted_foreground)))
+                            .when(idx > 0, |el| {
+                                el.child(Label::new("/").text_color(cx.theme().muted_foreground))
+                            })
                             .child(
                                 Button::new(format!("crumb-{}", path.display()))
                                     .label(name)
@@ -111,7 +112,11 @@ impl Render for Breadcrumbs {
             )
             .child(
                 Button::new("btn-toggle-hidden")
-                    .label(if show_hidden { "Hidden: ON" } else { "Hidden: OFF" })
+                    .label(if show_hidden {
+                        "Hidden: ON"
+                    } else {
+                        "Hidden: OFF"
+                    })
                     .ghost()
                     .on_click(cx.listener({
                         let ws = self.workspace.clone();

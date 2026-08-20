@@ -1,9 +1,10 @@
 use gpui::prelude::*;
 use gpui::{
-    Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent,
+    Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, KeyDownEvent,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollDelta, ScrollWheelEvent,
     MouseButton, ParentElement, Render, Styled, Window, div, px,
 };
+use gpui_component::dock::{BasePanel, Panel, PanelEvent};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{
     ActiveTheme, Disableable, StyledExt, h_flex, label::Label, v_flex,
@@ -324,9 +325,23 @@ impl GraphView {
     }
 }
 
+impl EventEmitter<PanelEvent> for GraphView {}
+
 impl Focusable for GraphView {
     fn focus_handle(&self, _: &gpui::App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+impl BasePanel for GraphView {
+    fn panel_name(&self) -> &'static str {
+        "GraphView"
+    }
+}
+
+impl Panel for GraphView {
+    fn title(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        "Graph Visualizer"
     }
 }
 
